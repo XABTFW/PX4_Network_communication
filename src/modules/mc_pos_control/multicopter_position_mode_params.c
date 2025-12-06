@@ -109,7 +109,7 @@ PARAM_DEFINE_FLOAT(MPC_VEL_MAN_BACK, -1.f);
  * @decimal 2
  * @group Multicopter Position Control
  */
-PARAM_DEFINE_FLOAT(MPC_ACC_HOR_MAX, 5.f);
+PARAM_DEFINE_FLOAT(MPC_ACC_HOR_MAX, 2.f);
 
 /**
  * Maximum horizontal and vertical jerk in Position/Altitude mode
@@ -128,7 +128,7 @@ PARAM_DEFINE_FLOAT(MPC_ACC_HOR_MAX, 5.f);
  * @increment 1
  * @group Multicopter Position Control
  */
-PARAM_DEFINE_FLOAT(MPC_JERK_MAX, 8.f);
+PARAM_DEFINE_FLOAT(MPC_JERK_MAX, 5.f);
 
 /**
  * Deadzone for sticks in manual piloted modes

@@ -112,6 +112,13 @@
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/velocity_limits.h>
 
+
+#include <uORB/topics/leader_info.h>
+#include <uORB/topics/follower_info.h>
+#include <uORB/topics/swarm_start_flag.h>
+#include <uORB/topics/leader_id.h>
+#include <uORB/topics/test_mavlink_rx.h>
+
 #if !defined(CONSTRAINED_FLASH)
 # include <uORB/topics/debug_array.h>
 # include <uORB/topics/debug_key_value.h>
@@ -156,6 +163,13 @@ private:
 
 	void handle_message(mavlink_message_t *msg);
 	void handle_messages_in_gimbal_mode(mavlink_message_t &msg);
+
+	void handle_message_swarm_start_flag(mavlink_message_t *msg);
+	void handle_message_leader_info(mavlink_message_t *msg);
+	void handle_message_leader_group_id(mavlink_message_t *msg);
+	
+	void handle_message_test_mavlink_rx(mavlink_message_t *msg);
+
 
 	void handle_message_adsb_vehicle(mavlink_message_t *msg);
 	void handle_message_att_pos_mocap(mavlink_message_t *msg);
@@ -291,8 +305,17 @@ private:
 	uint8_t _mavlink_status_last_buffer_overrun{0};
 	uint8_t _mavlink_status_last_parse_error{0};
 	uint16_t _mavlink_status_last_packet_rx_drop_count{0};
+	leader_id_s _group_id{};
+	uint32_t leader_id{0};
 
 	// ORB publications
+	uORB::Publication<leader_info_s>				_leader_info_pub{ORB_ID(leader_info)};
+	uORB::Publication<follower_info_s>				_follower_info_pub{ORB_ID(follower_info)};
+	uORB::Publication<swarm_start_flag_s>				_swarm_start_flag_pub{ORB_ID(swarm_start_flag)};
+	uORB::Publication<leader_id_s>				_group_id_Pub{ORB_ID(leader_id)};
+
+	uORB::Publication<test_mavlink_rx_s> 		_test_mavlink_rx_pub{ORB_ID(test_mavlink_rx)};
+
 	uORB::Publication<airspeed_s>				_airspeed_pub{ORB_ID(airspeed)};
 	uORB::Publication<battery_status_s>			_battery_pub{ORB_ID(battery_status)};
 	uORB::Publication<camera_status_s>			_camera_status_pub{ORB_ID(camera_status)};
@@ -360,6 +383,8 @@ private:
 	uORB::Subscription	_autotune_attitude_control_status_sub{ORB_ID(autotune_attitude_control_status)};
 
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
+
+	uORB::Subscription	_group_id_sub{ORB_ID(leader_id)};
 
 	// hil_sensor and hil_state_quaternion
 	enum SensorSource {

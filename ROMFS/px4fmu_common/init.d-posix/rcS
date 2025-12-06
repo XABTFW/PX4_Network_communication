@@ -370,3 +370,6 @@ fi
 
 mavlink boot_complete
 replay trystart
+
+swarm_node start 
+test_mavlink start

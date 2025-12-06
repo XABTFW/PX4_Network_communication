@@ -108,7 +108,7 @@ fi
 if [ -n "${PX4_SIM_MODEL#*gz_}" ] && [ -z "${PX4_GZ_MODEL_NAME}" ]; then
 	# Spawn a model
 	MODEL_NAME="${PX4_SIM_MODEL#*gz_}"
-	MODEL_NAME_INSTANCE="${MODEL_NAME}_${px4_instance}"
+	MODEL_NAME_INSTANCE="${MODEL_NAME}_$((${px4_instance}+1))"
 
 	sdf_pose_str=""
 

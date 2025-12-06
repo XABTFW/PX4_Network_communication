@@ -1,0 +1,12 @@
+uint64 timestamp  # time since system start (microseconds)
+
+uint32 mavid      #mavid
+float64 lat       # follower position (deg * 1e7)
+float64 lon       # follower position (deg * 1e7)
+float64 alt       # follower  altitude (m)
+float64 vx	  	  # follower velocity of vx
+float64 vy	  	  # follower velocity of vy
+float64 vz	  	  # follower velocity of vz
+float64 yaw	  	  # follower yaw (only for multirotors), in rad [-PI..PI), NaN = hold current yaw
+float64 yawspeed  # follower yawspeed (only for multirotors, in rad/s)
+uint32 land       # ture if leader landing

@@ -137,6 +137,24 @@ void
 MavlinkReceiver::handle_message(mavlink_message_t *msg)
 {
 	switch (msg->msgid) {
+
+	case MAVLINK_MSG_ID_TEST_MAVLINK:
+		handle_message_test_mavlink_rx(msg);
+    	break;
+
+
+	case MAVLINK_MSG_ID_SWARM_START_FLAG:
+		handle_message_swarm_start_flag(msg);
+		break;
+
+	// case MAVLINK_MSG_ID_LEADER_GROUP_ID:
+	// 	handle_message_leader_group_id(msg);
+	// 	break;
+
+	case MAVLINK_MSG_ID_LEADER_INFO:
+		handle_message_leader_info(msg);
+		break;
+
 	case MAVLINK_MSG_ID_COMMAND_LONG:
 		handle_message_command_long(msg);
 		break;
@@ -3516,4 +3534,130 @@ void MavlinkReceiver::stop()
 {
 	_should_exit.store(true);
 	pthread_join(_thread, nullptr);
+}
+
+void
+MavlinkReceiver::handle_message_swarm_start_flag(mavlink_message_t *msg){
+	//leader_id_s _group_id{};
+	_group_id_sub.copy(&_group_id);
+	swarm_start_flag_s _swarm_start_flag{};
+
+
+	PX4_INFO("从机：msg->sysid is %d",msg->sysid);
+	PX4_INFO("从机：msg->compid is %d",msg->compid);
+
+	//这个55还发不发，需要和地面站进行相互确认
+	if(_group_id.leader == 0){
+	//if((_group_id.leader == 0) && (msg->sysid == 55) && (msg->compid == 55)){
+		mavlink_swarm_start_flag_t _swarm_start_flag_msg{};
+		mavlink_msg_swarm_start_flag_decode(msg, &_swarm_start_flag_msg);
+		_swarm_start_flag.timestamp = hrt_absolute_time();
+		_swarm_start_flag.start_swarm = _swarm_start_flag_msg.start_swarm;
+		_swarm_start_flag.start_swarm_auto = _swarm_start_flag_msg.start_swarm_auto;
+		_swarm_start_flag.stop_swarm = _swarm_start_flag_msg.stop_swarm;
+		_swarm_start_flag_pub.publish(_swarm_start_flag);
+
+
+	}
+
+	else if(_group_id.leader == 1) {
+    //else if(_group_id.leader == 1 && (msg->sysid == 55) && (msg->compid == 55)){
+		mavlink_swarm_start_flag_t _swarm_start_flag_msg{};
+		mavlink_msg_swarm_start_flag_decode(msg, &_swarm_start_flag_msg);
+		_swarm_start_flag.timestamp = hrt_absolute_time();
+		_swarm_start_flag.start_swarm = _swarm_start_flag_msg.start_swarm;
+		_swarm_start_flag.start_swarm_auto = _swarm_start_flag_msg.start_swarm_auto;
+		_swarm_start_flag.stop_swarm = _swarm_start_flag_msg.stop_swarm;
+		_swarm_start_flag.pause_swarm = _swarm_start_flag_msg.Pause_swarm;
+		_swarm_start_flag.continue_swarm= _swarm_start_flag_msg.continue_swarm;
+
+		_swarm_start_flag_pub.publish(_swarm_start_flag);
+	}
+
+}
+
+
+
+void
+MavlinkReceiver::handle_message_leader_info(mavlink_message_t *msg)
+{
+		leader_info_s _leader_info{};
+		follower_info_s _follower_info{};
+
+		mavlink_leader_info_t  _leader_info_msg{};
+		mavlink_msg_leader_info_decode(msg, &_leader_info_msg);
+		
+		// ⭐⭐ 关键改进：支持动态选择主机，不再硬编码ID=2
+		// 读取SWARM_LEADER_ID参数来判断哪个是主机
+		int32_t selected_leader_id = 0;
+		param_t param_leader_id = param_find("SWARM_LEADER_ID");
+		if (param_leader_id != PARAM_INVALID) {
+			param_get(param_leader_id, &selected_leader_id);
+		}
+		
+		// 判断是否是主机：
+		// 1. 如果SWARM_LEADER_ID > 0，检查mavid是否匹配
+		// 2. 如果SWARM_LEADER_ID == 0（未设置），使用向后兼容逻辑（默认ID=2）
+		bool is_leader = false;
+		if (selected_leader_id > 0) {
+			// 指定模式：检查mavid是否匹配选定的主机ID
+			// ⭐ 修复类型不匹配：将int32_t转换为uint32_t进行比较
+			is_leader = (_leader_info_msg.mavid == (uint32_t)selected_leader_id);
+		} else {
+			// 自动模式/向后兼容：默认ID=2为主机
+			is_leader = (_leader_info_msg.mavid == 2);
+		}
+		
+		if (is_leader) {
+			// 发布为主机信息
+			_leader_info.timestamp = hrt_absolute_time();
+			_leader_info.mavid = _leader_info_msg.mavid;
+			_leader_info.lat = _leader_info_msg.lat;
+			_leader_info.lon = _leader_info_msg.lon;
+			_leader_info.alt = _leader_info_msg.rel_alt;
+			_leader_info.vx  = _leader_info_msg.vx;
+			_leader_info.vy  = _leader_info_msg.vy;
+			_leader_info.vz  = _leader_info_msg.vz;
+			_leader_info.yaw = _leader_info_msg.yaw;
+			_leader_info.yawspeed = _leader_info_msg.yaw_speed;
+			_leader_info.land = _leader_info_msg.land;
+			_leader_info_pub.publish(_leader_info);
+			
+			// 调试输出（每2秒一次）
+			static uint64_t last_leader_log = 0;
+			uint64_t now = hrt_absolute_time();
+			if (now - last_leader_log > 2000000) {
+				PX4_INFO("[MAVLink接收] 收到主机%d的LEADER_INFO消息，已发布为leader_info", _leader_info_msg.mavid);
+				last_leader_log = now;
+			}
+		} else {
+			// 发布为从机信息
+			_follower_info.timestamp = hrt_absolute_time();
+			_follower_info.mavid = _leader_info_msg.mavid;
+			_follower_info.lat = _leader_info_msg.lat;
+			_follower_info.lon = _leader_info_msg.lon;
+			_follower_info.alt = _leader_info_msg.rel_alt;
+			_follower_info.vx  = _leader_info_msg.vx;
+			_follower_info.vy  = _leader_info_msg.vy;
+			_follower_info.vz  = _leader_info_msg.vz;
+			_follower_info.yaw = _leader_info_msg.yaw;
+			_follower_info.yawspeed = _leader_info_msg.yaw_speed;
+			_follower_info.land = _leader_info_msg.land;
+			_follower_info_pub.publish(_follower_info);
+		}
+}
+
+
+void
+MavlinkReceiver::handle_message_test_mavlink_rx(mavlink_message_t *msg)
+{
+    mavlink_test_mavlink_t mavlink_test_msg;
+    mavlink_msg_test_mavlink_decode(msg, &mavlink_test_msg);
+    
+    test_mavlink_rx_s __test_mavlink_rx;
+
+    __test_mavlink_rx.test1=mavlink_test_msg.test1;
+    __test_mavlink_rx.test2=mavlink_test_msg.test2;
+    __test_mavlink_rx.test3=mavlink_test_msg.test3;
+    _test_mavlink_rx_pub.publish(__test_mavlink_rx);
 }

@@ -269,6 +269,12 @@ set(msg_files
 	versioned/VehicleRatesSetpoint.msg
 	versioned/VehicleStatus.msg
 	versioned/VtolVehicleStatus.msg
+	LeaderInfo.msg
+	FollowerInfo.msg
+	SwarmStartFlag.msg
+	LeaderId.msg
+	test_mavlink_tx.msg
+	test_mavlink_rx.msg
 )
 list(SORT msg_files)
 

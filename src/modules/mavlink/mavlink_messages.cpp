@@ -131,6 +131,11 @@
 #include "streams/CURRENT_MODE.hpp"
 #endif
 
+# include "streams/MAVLINK_TEST.hpp"
+# include "streams/LEADER_ID.hpp"
+# include "streams/LEADER_INFO.hpp"
+
+
 #if !defined(CONSTRAINED_FLASH)
 # include "streams/ADSB_VEHICLE.hpp"
 # include "streams/AUTOPILOT_STATE_FOR_GIMBAL_DEVICE.hpp"
@@ -247,6 +252,10 @@ static_assert(MAV_SENSOR_ROTATION_CUSTOM == static_cast<MAV_SENSOR_ORIENTATION>(
 
 
 static const StreamListItem streams_list[] = {
+	create_stream_list_item<MavlinkStreamMavlinktest>(),
+	create_stream_list_item<MavlinkStreamLeaderidinfo>(),
+	create_stream_list_item<MavlinkStreamLeaderInfo>(),
+
 #if defined(HEARTBEAT_HPP)
 	create_stream_list_item<MavlinkStreamHeartbeat>(),
 #endif // HEARTBEAT_HPP
