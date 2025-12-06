@@ -510,6 +510,9 @@ void Swarm_Node::start_swarm_node()
                     matrix::Vector3f other_pos(other_aircraft[i].x, other_aircraft[i].y, 0.0f);
                     matrix::Vector3f other_vel(other_aircraft[i].vx, other_aircraft[i].vy, 0.0f);
                     
+                    // 修复：检查是否是主机，主机避撞需要更敏感的检测
+                    bool is_leader_aircraft = other_aircraft[i].is_leader;
+                    
                     // 如果编队切换或找目标位置，使用目标点方向作为预测方向（而不是当前速度）
                     // 修复：从机在找目标位置时也应该使用目标点方向，更准确预测碰撞风险
                     matrix::Vector3f my_target_dir = my_vel;
@@ -565,9 +568,19 @@ void Swarm_Node::start_swarm_node()
                     //  关键改进：在保持编队时，提高对冲检测阈值，避免过度避让
                     // 保持编队时，飞机之间保持固定偏移量，这是正常的，不需要强烈避撞
                     // 修复：从机在找目标位置时也应该使用正常避撞阈值
+                    // 修复：主机避撞使用更敏感的阈值，确保主从避撞更早触发
                     bool is_moving_to_target_local = formation_switching || enable_path_planning;
-                    float collision_distance_threshold = is_moving_to_target_local ? 4.0f : 2.5f;  // 保持编队时降低阈值
-                    float collision_dot_threshold = is_moving_to_target_local ? -0.3f : -0.5f;  // 保持编队时提高阈值（更严格）
+                    float collision_distance_threshold;
+                    float collision_dot_threshold;
+                    if (is_leader_aircraft) {
+                        // 主机避撞：使用更敏感的阈值，更早检测
+                        collision_distance_threshold = is_moving_to_target_local ? 5.0f : 4.0f;  // 主机使用更大的检测距离
+                        collision_dot_threshold = is_moving_to_target_local ? -0.2f : -0.3f;  // 主机使用更宽松的dot阈值
+                    } else {
+                        // 从机避撞：使用正常阈值
+                        collision_distance_threshold = is_moving_to_target_local ? 4.0f : 2.5f;
+                        collision_dot_threshold = is_moving_to_target_local ? -0.3f : -0.5f;
+                    }
                     
                     //  当前距离对冲检测
                     if (distance > 0.1f && distance < collision_distance_threshold) {
@@ -581,8 +594,18 @@ void Swarm_Node::start_swarm_node()
                                      (double)min_predicted_distance, (double)critical_time);
                         }
                         // 近距离对冲（保持编队时提高阈值）
-                        float close_distance_threshold = is_moving_to_target_local ? 2.5f : 1.5f;  // 保持编队时降低阈值
-                        float close_dot_threshold = is_moving_to_target_local ? -0.1f : -0.3f;  // 保持编队时提高阈值（更严格）
+                        // 修复：主机避撞使用更敏感的近距离阈值
+                        float close_distance_threshold;
+                        float close_dot_threshold;
+                        if (is_leader_aircraft) {
+                            // 主机避撞：使用更敏感的阈值
+                            close_distance_threshold = is_moving_to_target_local ? 3.5f : 3.0f;  // 主机使用更大的近距离阈值
+                            close_dot_threshold = is_moving_to_target_local ? 0.0f : -0.1f;  // 主机使用更宽松的dot阈值
+                        } else {
+                            // 从机避撞：使用正常阈值
+                            close_distance_threshold = is_moving_to_target_local ? 2.5f : 1.5f;
+                            close_dot_threshold = is_moving_to_target_local ? -0.1f : -0.3f;
+                        }
                         if (distance < close_distance_threshold && dot_product < close_dot_threshold) {
                             critical_collision_risk = true;
                             PX4_WARN("[近距对冲] 从机%d↔飞机%d: %.2fm TTC=%.2fs",
@@ -593,8 +616,18 @@ void Swarm_Node::start_swarm_node()
                     //  关键改进：在保持编队时，提高轨迹交叉检测阈值，避免过度避让
                     // 保持编队时，飞机之间保持固定偏移量，这是正常的，不需要强烈避撞
                     // 修复：从机在找目标位置时也应该使用正常避撞阈值
-                    float critical_distance_threshold = is_moving_to_target_local ? 2.5f : 1.5f;  // 保持编队时降低阈值（更严格）
-                    float warning_distance_threshold = is_moving_to_target_local ? 4.0f : 2.5f;   // 保持编队时降低阈值（更严格）
+                    // 修复：主机避撞使用更敏感的轨迹交叉阈值
+                    float critical_distance_threshold;
+                    float warning_distance_threshold;
+                    if (is_leader_aircraft) {
+                        // 主机避撞：使用更敏感的阈值，更早检测
+                        critical_distance_threshold = is_moving_to_target_local ? 3.5f : 3.0f;  // 主机使用更大的critical阈值
+                        warning_distance_threshold = is_moving_to_target_local ? 5.0f : 4.5f;   // 主机使用更大的warning阈值
+                    } else {
+                        // 从机避撞：使用正常阈值
+                        critical_distance_threshold = is_moving_to_target_local ? 2.5f : 1.5f;
+                        warning_distance_threshold = is_moving_to_target_local ? 4.0f : 2.5f;
+                    }
                     
                     // 预测距离<2.5米：critical（立即强制避撞）
                     if (min_predicted_distance < critical_distance_threshold && critical_time < prediction_horizon) {
@@ -774,11 +807,35 @@ void Swarm_Node::start_swarm_node()
           }
           
           float correction_scale = 1.0f;
+          // 修复：检查是否有主机在避撞范围内，主机避撞需要更强的位置修正
+          bool has_leader_collision = false;
+          if (collision_risk) {
+              for (int i = 0; i < MAX_SWARM_SIZE; i++) {
+                  if (other_aircraft[i].valid && other_aircraft[i].is_leader) {
+                      matrix::Vector3f leader_pos(other_aircraft[i].x, other_aircraft[i].y, 0.0f);
+                      matrix::Vector3f my_pos(veicle_own_position(0), veicle_own_position(1), 0.0f);
+                      float leader_distance = (leader_pos - my_pos).norm();
+                      // 如果主机在避撞范围内，标记为主机避撞
+                      if (leader_distance < _param_apf_max_distance.get() * 2.0f) {
+                          has_leader_collision = true;
+                          break;
+                      }
+                  }
+              }
+          }
+          
           // 关键改进：在保持编队时，大幅减弱位置修正，避免过度避让
           // 保持编队时，飞机之间保持固定偏移量，这是正常的，不需要强烈避撞
+          // 修复：主机避撞始终使用强位置修正，确保主从避撞有效
           if (collision_risk && vo_result.time_to_collision < ttc_threshold_pos_scale) {
               float ttc = vo_result.time_to_collision;
-              if (formation_switching) {
+              if (has_leader_collision) {
+                  // 主机避撞：使用强位置修正，确保能及时避让
+                  // TTC越小，放大倍数越大 [3, 5]
+                  correction_scale = 3.0f + 2.0f * (ttc_threshold_pos_scale - ttc) / ttc_threshold_pos_scale;  // ttc=0时5倍
+                  PX4_WARN("[主机位置修正] 主机避撞！放大位置修正量！TTC=%.2fs 倍数=%.1fx 当前速度=%.2fm/s", 
+                           (double)ttc, (double)correction_scale, (double)current_speed_pos);
+              } else if (formation_switching) {
                   // 编队切换时：适度放大位置修正量，确保避撞效果
                   // TTC越小，放大倍数越大 [2, 4]
                   correction_scale = 2.0f + 2.0f * (ttc_threshold_pos_scale - ttc) / ttc_threshold_pos_scale;  // ttc=0时4倍

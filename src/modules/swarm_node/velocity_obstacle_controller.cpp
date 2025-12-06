@@ -101,9 +101,10 @@ VelocityObstacleController::calculate_safe_velocity(
         }
 
         // 只在避障范围内处理
-        // 修复：主机避撞使用更大的检测距离（1.5倍），确保主从避撞有效
+        // 修复：主机避撞使用更大的检测距离（2.0倍），确保主从避撞更早检测
+        // 从机之间使用正常距离，主机使用2倍距离，确保主从避撞更敏感
         float effective_max_distance = aircraft.is_leader ? 
-            (_config.max_avoidance_distance * 1.5f) : _config.max_avoidance_distance;
+            (_config.max_avoidance_distance * 2.0f) : _config.max_avoidance_distance;
         if (distance_xy < effective_max_distance && distance_xy > 0.1f) {
             // 计算时间到碰撞（TTC）
             float ttc = calculate_ttc(relative_pos_xy, relative_vel_xy);
@@ -184,18 +185,26 @@ VelocityObstacleController::calculate_safe_velocity(
             // 修复：主机避撞始终使用正常强度，不受编队状态影响
             float force_scale = 1.0f;
             if (aircraft.is_leader) {
-                // 主机避撞：始终使用正常或增强的避撞力，确保主从避撞有效
+                // 主机避撞：始终使用增强的避撞力，确保主从避撞有效
+                // 修复：增强主机避撞力，特别是近距离时，确保能及时避让
                 if (on_path) {
-                    // 主机在路径上：使用增强避撞力（2.0-3.0倍）
-                    force_scale = 2.0f + 1.0f * path_collision_risk;  // [2.0, 3.0]
+                    // 主机在路径上：使用强避撞力（3.0-4.0倍），确保能及时避让
+                    force_scale = 3.0f + 1.0f * path_collision_risk;  // [3.0, 4.0] 从[2.0, 3.0]提高
                     PX4_WARN("[主机路径避撞] 主机%d在路径上！路径碰撞风险=%.2f 增强避撞力%.1fx 预测最小距离=%.2fm", 
                              aircraft.mavid, (double)path_collision_risk, (double)force_scale,
                              (double)(distance_xy * (1.0f - path_collision_risk)));
                 } else {
-                    // 主机不在路径上：使用正常避撞力（0.5-1.0倍），确保主机避撞始终有效
-                    float distance_factor = distance_xy / _config.max_avoidance_distance;  // [0, 1]
-                    force_scale = 0.5f + 0.5f * (1.0f - distance_factor);  // [0.5, 1.0]
-                    PX4_INFO("[主机非路径避撞] 主机%d不在路径上，使用正常避撞力%.2fx 距离=%.2fm", 
+                    // 主机不在路径上：根据距离动态调整，近距离时使用强避撞力
+                    // 修复：近距离时使用更强的避撞力，确保能及时避让
+                    float distance_factor = distance_xy / effective_max_distance;  // [0, 1]
+                    if (distance_xy < _config.safety_radius * 2.0f) {
+                        // 近距离（<2倍安全半径）：使用强避撞力（1.5-2.5倍）
+                        force_scale = 1.5f + 1.0f * (1.0f - distance_factor);  // [1.5, 2.5]
+                    } else {
+                        // 远距离：使用正常避撞力（0.8-1.5倍）
+                        force_scale = 0.8f + 0.7f * (1.0f - distance_factor);  // [0.8, 1.5]
+                    }
+                    PX4_WARN("[主机非路径避撞] 主机%d不在路径上，使用避撞力%.2fx 距离=%.2fm", 
                              aircraft.mavid, (double)force_scale, (double)distance_xy);
                 }
             } else {
