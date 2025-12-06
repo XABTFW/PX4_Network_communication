@@ -121,15 +121,24 @@ VelocityObstacleController::calculate_safe_velocity(
             matrix::Vector3f desired_vel_xy(desired_vel(0), desired_vel(1), 0.0f);
             float desired_speed = desired_vel_xy.norm();
             
-            // 减弱预测：只在TTC很短且速度很快时才预测路径
-            if (ttc > 0.0f && ttc < 2.0f && desired_speed > 1.5f) {
-                // TTC有效且速度较快，说明正在快速接近，可能在路径上
+            // 修复：降低速度阈值，确保低速时也能进行路径预测
+            // 即使速度慢，如果距离很近，仍然需要预测路径检测碰撞风险
+            // 使用当前速度或期望速度的较大值，确保低速时也能检测
+            float effective_speed = fmaxf(desired_speed, sqrtf(current_vel_xy(0)*current_vel_xy(0) + current_vel_xy(1)*current_vel_xy(1)));
+            
+            // 修复：降低速度阈值从1.5m/s到0.3m/s，确保低速时也能预测路径
+            // 同时延长TTC阈值，给低速情况更多时间检测
+            float ttc_threshold = (effective_speed > 1.0f) ? 2.0f : 3.0f;  // 低速时延长预测时间
+            if (ttc > 0.0f && ttc < ttc_threshold && effective_speed > 0.3f) {
+                // TTC有效，说明正在接近，可能在路径上
                 // 计算相对速度在相对位置方向的投影（接近速度）
                 matrix::Vector3f relative_dir = relative_pos_xy.normalized();
                 float closing_speed = -relative_dir.dot(relative_vel_xy);
                 
-                // 提高接近速度阈值，避免误判
-                if (closing_speed > 0.5f) {
+                // 修复：降低接近速度阈值，确保低速时也能检测
+                // 低速时即使接近速度小，如果距离很近，仍然有碰撞风险
+                float closing_speed_threshold = (effective_speed > 1.0f) ? 0.5f : 0.2f;
+                if (closing_speed > closing_speed_threshold) {
                     // 正在快速接近，使用期望速度预测路径
                     // 缩短预测时间到1秒，避免过度预测
                     float min_future_distance = distance_xy;

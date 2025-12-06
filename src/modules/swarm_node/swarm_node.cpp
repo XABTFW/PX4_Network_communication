@@ -701,9 +701,19 @@ void Swarm_Node::start_swarm_node()
           float current_speed_check = sqrtf(_vehicle_local_position.vx * _vehicle_local_position.vx + 
                                             _vehicle_local_position.vy * _vehicle_local_position.vy);
           
-          //  改进：降低触发阈值，更早触发速度替换（从3.5/4.0降低到2.5/3.0）
-          // 这样可以在更早的阶段就响应避撞，提高响应速度
-          float ttc_threshold_replace = (current_speed_check > 5.0f) ? 3.0f : 2.5f;  // 更早触发
+          //  修复：根据速度动态调整TTC阈值，低速时延长阈值，确保低速时也能及时触发避撞
+          // 低速时需要更早触发，因为速度慢意味着需要更多时间避让
+          float ttc_threshold_replace;
+          if (current_speed_check > 5.0f) {
+              // 高速时：3.0秒
+              ttc_threshold_replace = 3.0f;
+          } else if (current_speed_check > 1.0f) {
+              // 中速时：3.5秒
+              ttc_threshold_replace = 3.5f;
+          } else {
+              // 低速时：4.0秒，给更多时间提前避撞
+              ttc_threshold_replace = 4.0f;
+          }
           
           //  改进：只要有碰撞风险就替换速度，不等待critical_collision_risk
           // 这样可以更快响应，提高避撞响应速度
@@ -711,9 +721,21 @@ void Swarm_Node::start_swarm_node()
               // 检测到碰撞风险时：立即使用避撞速度，覆盖期望速度
               matrix::Vector3f avoidance_vel = vo_result.safe_target_velocity;
               
-              //  确保避撞速度足够大，但适度降低（从10/8降低到8/6，减弱避撞力）
+              //  修复：根据当前速度动态调整避撞速度最小值，确保低速时也能有效避撞
+              // 低速时避撞速度应该至少是当前速度的1.5倍，但不超过合理范围
               float avoidance_speed = avoidance_vel.norm();
-              float min_avoidance_speed = (current_speed_check > 5.0f) ? 8.0f : 6.0f;  // 高速时要求更大（从10/8降低到8/6）
+              float min_avoidance_speed;
+              if (current_speed_check > 5.0f) {
+                  // 高速时：要求更大的避撞速度（8m/s）
+                  min_avoidance_speed = 8.0f;
+              } else if (current_speed_check > 1.0f) {
+                  // 中速时：要求适中的避撞速度（4m/s）
+                  min_avoidance_speed = 4.0f;
+              } else {
+                  // 低速时：避撞速度至少是当前速度的1.5倍，但最小1.0m/s
+                  min_avoidance_speed = fmaxf(current_speed_check * 1.5f, 1.0f);
+              }
+              
               if (avoidance_speed < min_avoidance_speed && avoidance_speed > 0.1f) {
                   avoidance_vel = avoidance_vel.normalized() * min_avoidance_speed;
                   PX4_WARN("[避撞速度增强] 从机%d: 避撞速度%.2fm/s太小，增强到%.2fm/s 当前速度=%.2fm/s", 
@@ -737,9 +759,19 @@ void Swarm_Node::start_swarm_node()
           float current_speed_pos = sqrtf(_vehicle_local_position.vx * _vehicle_local_position.vx + 
                                          _vehicle_local_position.vy * _vehicle_local_position.vy);
           
-          //  改进：降低触发阈值，更早应用位置修正（从3.5/4.0降低到2.5/3.0）
-          // 这样可以在更早的阶段就应用位置修正，提高响应速度
-          float ttc_threshold_pos_scale = (current_speed_pos > 5.0f) ? 3.0f : 2.5f;  // 更早触发
+          //  修复：根据速度动态调整位置修正的TTC阈值，低速时延长阈值，确保低速时也能及时触发避撞
+          // 低速时需要更早触发，因为速度慢意味着需要更多时间避让
+          float ttc_threshold_pos_scale;
+          if (current_speed_pos > 5.0f) {
+              // 高速时：3.0秒
+              ttc_threshold_pos_scale = 3.0f;
+          } else if (current_speed_pos > 1.0f) {
+              // 中速时：3.5秒
+              ttc_threshold_pos_scale = 3.5f;
+          } else {
+              // 低速时：4.0秒，给更多时间提前避撞
+              ttc_threshold_pos_scale = 4.0f;
+          }
           
           float correction_scale = 1.0f;
           // 关键改进：在保持编队时，大幅减弱位置修正，避免过度避让
