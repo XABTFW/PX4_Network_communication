@@ -22,10 +22,7 @@ Swarm_Node::~Swarm_Node()
 void
 Swarm_Node::set_swarm_offset(const matrix::Vector3f &sp_offset)
 {
-	//  关键修复：不要重置滤波器状态，避免切换队形时从机乱动
-	// 只在初始化时重置滤波器，切换队形时保持滤波器状态，确保平滑过渡
 	_sp_offset = sp_offset;
-	// _filter_initialized = false;  // 注释掉，避免切换队形时重置滤波器
 }
 
 void
@@ -46,41 +43,21 @@ Swarm_Node::set_swarm_info(const int &set_as_leader, const int &group_id)
 	}
 
 	_group_id_pub.publish(_leader_group_id);
-
-//上面这样的写法，实际上主机从机都会发布自己的_leader_group_id，也就意味着所有的主机、从机都在往leader_id这个mavlink消息包里面发消息，
-//这也就是为什么在地面站接这个包的时候，bool leader这个变量会出现跳变的情况
 }
 
 
 bool
 Swarm_Node::init()
 {
-
-	ScheduleOnInterval(20000_us); // 2000 us interval, 50 Hz rate
-
+	ScheduleOnInterval(20000_us); // 50 Hz rate
 	return true;
 }
 
-
-bool
-Swarm_Node::takeoff()
-{
-	control_instance::getInstance()->Control_posxyz(begin_x, begin_y, begin_z - 1);
-	return false;
-}
-
-
-bool
-Swarm_Node::arm_offboard()
-{
-	return false;
-}
 
 bool Swarm_Node::swarm_node_init()
 {
 
     if (_init_done) {
-        // 如果已经初始化过了，直接返回
         return true;
     }
 
@@ -94,22 +71,13 @@ bool Swarm_Node::swarm_node_init()
         PX4_WARN("无法获取MAV_SYS_ID参数，使用默认vehicle_id=%d", vehicle_id);
     }
 
-    // 初始化逻辑
     _last_sp_yaw = NAN;
 
-    // 订阅数据更新
     if (_vehicle_local_position_sub.updated()) {
         _vehicle_local_position_sub.copy(&_vehicle_local_position);
     }
 
-	// 删除重复的leader_info读取，避免数据竞争
-	// 主从跟随的数据读取在后面的Task中进行
-	//那现在的逻辑就是反正来了包先copy，然后去做判断，必须是本机的才进行之后的操作
-
 	_swarm_start_flag_sub.copy(&_swarm_start_flag);
-
-	//_last_leader_altitude = _leader_sp_glo_pos.alt;
-
 
     // 设置组号、偏移量等
     set_swarm_info(_param_swarm_set_leader.get(), _param_swarm_group_id.get());
@@ -135,13 +103,9 @@ bool Swarm_Node::swarm_node_init()
             _global_local_proj_ref.project(_leader_sp_glo_pos.lat, _leader_sp_glo_pos.lon, target_x, target_y);
         }
 
-        // 设置 _init_done 为 true，表示初始化完成
         _init_done = true;
-
-		PX4_INFO("swarm_node init return true");
         return true;
     }
-    //PX4_INFO("swarm_node init return false");
     return false;
 }
 
@@ -149,7 +113,6 @@ bool Swarm_Node::swarm_node_init()
 
 void Swarm_Node::start_swarm_node()
 {
-    //  在函数开始处统一获取选定的主机ID，避免重复声明
     int32_t selected_leader_id = _param_swarm_leader_id.get();
     
     if (!_set_as_leader) {
@@ -160,166 +123,81 @@ void Swarm_Node::start_swarm_node()
             return;
         }
 
-
-
         _vehicle_local_position_sub.copy(&_vehicle_local_position);
         
-        // 主从跟随：使用选定的主机ID（支持动态选择主机）
-        //  关键改进：从机可以跟随任意选定的主机，不再硬编码ID=2
         if (_leader_info_sub.updated()) {
             leader_info_s temp_info{};
             _leader_info_sub.copy(&temp_info);
             
-            // 使用函数开始处获取的selected_leader_id
-            
-            //  如果参数为0（未设置），使用第一个收到的leader_info（向后兼容）
-            // 如果参数>0，只使用指定ID的主机数据
             if (selected_leader_id == 0) {
-                // 自动模式：使用第一个收到的leader_info（向后兼容）
                 if (!PX4_ISFINITE(_leader_sp_glo_pos.lat) || _leader_sp_glo_pos.mavid == 0) {
                     _leader_sp_glo_pos = temp_info;
-                    PX4_INFO("[自动选择主机] 从机%d: 自动选择主机ID=%d", vehicle_id, temp_info.mavid);
                 }
             } else {
-                // 指定模式：只使用选定ID的主机数据
-                //  修复类型不匹配：将int32_t转换为uint32_t进行比较
                 if (temp_info.mavid == (uint32_t)selected_leader_id) {
-                    //  检查是否切换了主机（从旧主机切换到新主机）
                     if (_leader_sp_glo_pos.mavid != 0 && _leader_sp_glo_pos.mavid != (uint32_t)selected_leader_id) {
                         PX4_WARN("[主机切换] 从机%d: 从主机ID=%d切换到主机ID=%d", 
                                  vehicle_id, _leader_sp_glo_pos.mavid, selected_leader_id);
                     }
-                    _leader_sp_glo_pos = temp_info;  // 更新选定主机的位置
-                    PX4_INFO("[跟随选定主机] 从机%d: 跟随主机ID=%d", vehicle_id, selected_leader_id);
+                    _leader_sp_glo_pos = temp_info;
                 } else {
-                    // 收到其他飞机的数据，忽略（用于避撞，但不用于主从跟随）
-                    //  如果之前的主机ID不匹配，清除旧的主机位置信息
                     if (_leader_sp_glo_pos.mavid != 0 && _leader_sp_glo_pos.mavid != (uint32_t)selected_leader_id) {
-                        PX4_WARN("[清除旧主机] 从机%d: 清除旧主机ID=%d的位置信息，等待新主机ID=%d", 
-                                 vehicle_id, _leader_sp_glo_pos.mavid, selected_leader_id);
-                        _leader_sp_glo_pos = leader_info_s{};  // 清除旧主机位置
+                        _leader_sp_glo_pos = leader_info_s{};
                     }
-                    PX4_DEBUG("[忽略其他主机] 从机%d: 收到ID=%d的数据，但选定主机是ID=%d", 
-                              vehicle_id, temp_info.mavid, selected_leader_id);
                 }
             }
         }
 
-        // 位置共享：主机和从机都发布位置信息
-        //  关键：主机也需要发布位置信息，让从机能够接收到
         _sensor_gps_sub.copy(&_sensor_gps);
-        
-        // 1. 发布本机位置（主机和从机都发布）
         _position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps);
-        
-        if (_set_as_leader) {
-            // 主机：发布位置信息给从机
-            PX4_DEBUG("[主机发布] 主机%d: 发布位置信息给从机", vehicle_id);
-        }
-
-        // 2. 接收其他飞机位置信息（来自 MAVLink 广播）
-        // 传递选定的主机ID，用于识别主机位置（用于避撞和跟随）
-        // 使用函数开始处获取的selected_leader_id
-        if (!_set_as_leader) {
-            // 从机：接收位置信息
-            _position_sharing.update_other_positions(vehicle_id, _global_local_proj_ref, selected_leader_id);
-        }
-
-        // 3. 获取其他从机位置（用于避障和协调）
-        const OtherVehiclePosition* other_vehicles = _position_sharing.get_other_vehicles();
-
-        // 4. 可选：打印调试信息（只关注从机间通信）
-        static uint64_t last_debug_time = 0;
-        uint64_t now = hrt_absolute_time();
-        if (now - last_debug_time > 10000000) {  // 每10秒打印一次，减少日志
-            // 只显示其他从机，排除主机和本机
-            int follower_count = 0;
-            // 使用函数开始处获取的selected_leader_id
-            int32_t leader_id_to_exclude = (selected_leader_id > 0) ? selected_leader_id : 2;  // 如果未设置，默认排除ID=2
-            for (int i = 0; i < MAX_SWARM_SIZE; i++) {
-                if (other_vehicles[i].valid && i != vehicle_id && i != leader_id_to_exclude) {  // 排除主机和自己
-                    follower_count++;
-                }
-            }
-            PX4_INFO("从机%d: 检测到%d个其他从机位置信息（排除主机ID=%d）", vehicle_id, follower_count, leader_id_to_exclude);
-            last_debug_time = now;
-        }
+        _position_sharing.update_other_positions(vehicle_id, _global_local_proj_ref, selected_leader_id);
 
         matrix::Vector3f veicle_own_position;
         veicle_own_position(0) = _vehicle_local_position.x;
         veicle_own_position(1) = _vehicle_local_position.y;
         veicle_own_position(2) = _vehicle_local_position.z;
-        //可地面站设置的起逻辑飞高度
         float takeoff_altitude = _param_take_altitude.get();
          
         if (!PX4_ISFINITE(_leader_sp_glo_pos.lat) || !PX4_ISFINITE(_leader_sp_glo_pos.lon)) {
             PX4_WARN("主从跟随问题: _leader_sp_glo_pos无效 lat=%.6f lon=%.6f mav_id=%u",
                      (double)_leader_sp_glo_pos.lat, (double)_leader_sp_glo_pos.lon, _leader_sp_glo_pos.mavid);
-
-            // 调试：检查是否有任何leader_info消息
-            leader_info_s debug_info{};
-            bool has_leader_info = _leader_info_sub.copy(&debug_info);
-            PX4_INFO("调试: leader_info_sub状态: %s, mav_id=%u",
-                     has_leader_info ? "有数据" : "无数据", debug_info.mavid);
-
             return;
         }
 
-
         _global_local_proj_ref.project(_leader_sp_glo_pos.lat, _leader_sp_glo_pos.lon, target_x, target_y);
 
-        // 更新目标状态和速度
-        matrix::Vector3f new_target_position(target_x, target_y, begin_z + static_cast<float>(_leader_sp_glo_pos.alt));
-        
-        //  改进的编队切换检测：只检测目标位置的突变，不依赖速度
-        // 速度检测会导致误判，因为正常跟随时也可能高速移动
-        bool formation_switching = false;
-        if (_last_target_valid) {
-            matrix::Vector3f target_delta = new_target_position - _last_target_position;
-            float target_distance = target_delta.norm();
-            
-            //  关键改进：提高阈值到3.0米，避免小幅位置调整被误判为编队切换
-            // 只有真正的编队切换（偏移量大幅变化）才会触发
-            if (target_distance > 3.0f) {  // 从2.0f提高到3.0f
-                formation_switching = true;
-                PX4_WARN("[编队切换检测] 从机%d: 目标位置突变%.2fm，检测到编队切换!", 
-                         vehicle_id, (double)target_distance);
-            }
-        }
-        
-        //  移除速度检测：速度检测会导致误判，正常跟随时也可能高速移动
-        // 只依赖目标位置的突变来检测编队切换，更准确
-        
-        // 更新最终目标位置（编队位置）
         _final_target(0) = target_x;
         _final_target(1) = target_y;
         _final_target(2) = begin_z + static_cast<float>(_leader_sp_glo_pos.alt);
         
-        //  更新位置数据（用于路径规划和避撞检查）
-        // 传递选定的主机ID，用于识别主机位置（用于避撞）
-        // 使用函数开始处获取的selected_leader_id
+        bool formation_switching = false;
+        if (_last_target_valid) {
+            matrix::Vector3f target_delta = _final_target - _last_target_position;
+            float target_distance = target_delta.norm();
+            
+            if (target_distance > 3.0f) {
+                formation_switching = true;
+                PX4_WARN("[编队切换检测] 从机%d: 目标位置突变%.2fm", vehicle_id, (double)target_distance);
+            }
+        }
+        
         _position_sharing.update_other_positions(vehicle_id, _global_local_proj_ref, selected_leader_id);
         const OtherVehiclePosition* other_aircraft = _position_sharing.get_other_vehicles();
         
-        // 路径规划：在编队切换或距离目标较远时启用
-        matrix::Vector3f actual_target = _final_target;  // 默认直达编队位置
+        matrix::Vector3f actual_target = _final_target;
         
-        // 计算到目标的距离
         matrix::Vector3f to_target = _final_target - veicle_own_position;
-        to_target(2) = 0.0f;  // 只考虑XY平面
+        to_target(2) = 0.0f;
         float distance_to_target = to_target.norm();
         
-        //  启用路径规划的条件：
-        // 1. 编队切换时
-        // 2. 或距离目标超过3米（起飞后找初始队形）
         bool enable_path_planning = formation_switching || (distance_to_target > 3.0f);
         
         if (enable_path_planning) {
             FormationPlanner::PlannerConfig planner_config;
             planner_config.enable_planning = true;
             planner_config.prediction_time = 3.0f;
-            planner_config.collision_threshold = 2.5f;  // 2.5米碰撞阈值
-            planner_config.detour_distance = 3.5f;      // 3.5米绕行距离
+            planner_config.collision_threshold = 2.5f;
+            planner_config.detour_distance = 3.5f;
             _formation_planner.set_config(planner_config);
             
             matrix::Vector3f current_velocity(
@@ -337,39 +215,21 @@ void Swarm_Node::start_swarm_node()
                 vehicle_id
             );
             
-            // 根据规划结果选择目标
             if (plan_result.needs_detour && !plan_result.direct_path_safe) {
-                // 需要绕行：先飞到绕行航点
                 actual_target = plan_result.waypoint;
                 _using_detour_waypoint = true;
                 _current_waypoint = plan_result.waypoint;
-                
-                const char* reason = formation_switching ? "编队切换" : "初始队形";
-                PX4_WARN("[路径规划] 从机%d: %s检测到碰撞风险，使用绕行航点 航点=(%.2f,%.2f) 绕开飞机%d",
-                         vehicle_id, reason, (double)actual_target(0), (double)actual_target(1),
-                         plan_result.conflict_aircraft_id);
-            } else {
-                const char* reason = formation_switching ? "编队切换" : "初始队形";
-                PX4_INFO("[路径规划] 从机%d: %s路径安全，直达编队位置", vehicle_id, reason);
             }
         } else {
-            // 正常跟随模式：直接使用编队目标，不启用路径规划
-            // 如果之前在绕行，检查是否已经接近航点，可以切回直达
             if (_using_detour_waypoint) {
                 matrix::Vector3f to_waypoint = _current_waypoint - veicle_own_position;
-                float distance_to_waypoint = to_waypoint.norm();
-                
-                if (distance_to_waypoint < 1.0f) {
-                    // 已经接近绕行航点，切回直达编队位置
-                    PX4_INFO("[路径规划] 从机%d: 已到达绕行航点，切回直达编队位置", vehicle_id);
+                if (to_waypoint.norm() < 1.0f) {
                     _using_detour_waypoint = false;
                     actual_target = _final_target;
                 } else {
-                    // 继续飞向绕行航点
                     actual_target = _current_waypoint;
                 }
             }
-            // else: 正常直达编队位置，actual_target已经设置为_final_target
         }
         
         // 使用规划后的目标位置
@@ -383,7 +243,7 @@ void Swarm_Node::start_swarm_node()
         _sp_yaw_speed = _leader_sp_glo_pos.yawspeed;
         
         // 记录当前目标位置
-        _last_target_position = new_target_position;
+        _last_target_position = _final_target;
         _last_target_valid = true;
 
         // --- YAW unwrap 保留 ---
@@ -419,10 +279,12 @@ void Swarm_Node::start_swarm_node()
         bool enable_avoidance_check = _param_apf_enable.get() > 0.5f && !in_takeoff_phase;
         if (enable_avoidance_check) {
             // 始终启用避撞检查，提高响应速度
-            if (formation_switching) {
-                PX4_INFO("[避撞检查] 从机%d: 编队切换模式，启用速度障碍避撞检查", vehicle_id);
-            } else if (enable_path_planning) {
-                PX4_INFO("[避撞检查] 从机%d: 找目标位置模式，启用速度障碍避撞检查", vehicle_id);
+            if (enable_path_planning) {
+                if (formation_switching) {
+                    PX4_INFO("[避撞检查] 从机%d: 编队切换模式，启用速度障碍避撞检查", vehicle_id);
+                } else {
+                    PX4_INFO("[避撞检查] 从机%d: 找目标位置模式，启用速度障碍避撞检查", vehicle_id);
+                }
             } else {
                 PX4_DEBUG("[避撞检查] 从机%d: 正常跟随模式，启用速度障碍避撞检查", vehicle_id);
             }
@@ -434,7 +296,7 @@ void Swarm_Node::start_swarm_node()
             // 关键改进：在保持编队时，大幅减弱避撞反应，避免过度避让
             // 保持编队时，飞机之间保持固定偏移量，这是正常的，不需要强烈避撞
             // 修复：从机在找目标位置时（enable_path_planning=true）也应该使用正常避撞配置
-            bool is_moving_to_target = formation_switching || enable_path_planning;
+            bool is_moving_to_target = enable_path_planning;
             if (is_moving_to_target) {
                 // 编队切换或找目标位置时：使用正常避撞配置，确保安全
                 vo_config.safety_radius = _param_apf_safety_radius.get();
@@ -497,13 +359,24 @@ void Swarm_Node::start_swarm_node()
             // 检测严重碰撞风险：对冲情况 + 预测性轨迹碰撞检测
             //  预测未来1秒内的运动轨迹，检测路径交叉
             // 先计算有效飞机数量
+            uint64_t current_time_check = hrt_absolute_time();
             int valid_aircraft_count = 0;
             for (int j = 0; j < MAX_SWARM_SIZE; j++) {
-                if (other_aircraft[j].valid) valid_aircraft_count++;
+                if (other_aircraft[j].valid) {
+                    uint64_t age = current_time_check - other_aircraft[j].timestamp;
+                    if (age < 2000000) { // 2秒内有效
+                        valid_aircraft_count++;
+                    }
+                }
             }
             
             for (int i = 0; i < MAX_SWARM_SIZE; i++) {
                 if (other_aircraft[i].valid && i != vehicle_id) {
+                    // 检查时间戳，只使用2秒内的数据
+                    uint64_t age = current_time_check - other_aircraft[i].timestamp;
+                    if (age >= 2000000) { // 超过2秒，跳过
+                        continue;
+                    }
                     // 当前位置和速度
                     matrix::Vector3f my_pos(veicle_own_position(0), veicle_own_position(1), 0.0f);
                     matrix::Vector3f my_vel(_vehicle_local_position.vx, _vehicle_local_position.vy, 0.0f);
@@ -516,7 +389,7 @@ void Swarm_Node::start_swarm_node()
                     // 如果编队切换或找目标位置，使用目标点方向作为预测方向（而不是当前速度）
                     // 修复：从机在找目标位置时也应该使用目标点方向，更准确预测碰撞风险
                     matrix::Vector3f my_target_dir = my_vel;
-                    if (formation_switching || enable_path_planning) {
+                    if (enable_path_planning) {
                         matrix::Vector3f target_direction(
                             _sp_position_filtered(0) - veicle_own_position(0),
                             _sp_position_filtered(1) - veicle_own_position(1),
@@ -559,17 +432,20 @@ void Swarm_Node::start_swarm_node()
                     }
                     
                     // 计算TTC（Time To Collision）
-                    float closing_speed = -relative_pos.normalized().dot(relative_vel);
+                    float closing_speed = 0.0f;
                     float ttc = 999.0f;  // 默认很大
-                    if (closing_speed > 0.1f) {
-                        ttc = distance / closing_speed;  // 碰撞时间（秒）
+                    if (distance > 0.1f) {
+                        closing_speed = -relative_pos.normalized().dot(relative_vel);
+                        if (closing_speed > 0.1f) {
+                            ttc = distance / closing_speed;  // 碰撞时间（秒）
+                        }
                     }
                     
                     //  关键改进：在保持编队时，提高对冲检测阈值，避免过度避让
                     // 保持编队时，飞机之间保持固定偏移量，这是正常的，不需要强烈避撞
                     // 修复：从机在找目标位置时也应该使用正常避撞阈值
                     // 修复：主机避撞使用更敏感的阈值，确保主从避撞更早触发
-                    bool is_moving_to_target_local = formation_switching || enable_path_planning;
+                    bool is_moving_to_target_local = enable_path_planning;
                     float collision_distance_threshold;
                     float collision_dot_threshold;
                     if (is_leader_aircraft) {
@@ -583,11 +459,26 @@ void Swarm_Node::start_swarm_node()
                     }
                     
                     //  当前距离对冲检测
+                    // 修复：使用归一化向量和接近速度，确保判断准确
                     if (distance > 0.1f && distance < collision_distance_threshold) {
-                        float dot_product = relative_pos.dot(relative_vel);
+                        // 计算归一化的点积（方向关系）：范围 [-1, 1]
+                        // -1 表示完全相向，0 表示垂直，1 表示同向
+                        float normalized_dot_product = 0.0f;
+                        float relative_speed_mag = relative_vel.norm();
+                        if (relative_speed_mag > 0.1f) {
+                            matrix::Vector3f relative_dir = relative_pos.normalized();
+                            normalized_dot_product = relative_dir.dot(relative_vel.normalized());
+                        }
                         
-                        //  对冲检测：相向而行
-                        if (dot_product < collision_dot_threshold) {
+                        //  对冲检测：相向而行（归一化点积 < 阈值 且 正在接近）
+                        // 原阈值 collision_dot_threshold 是负数（如 -0.3f），表示相向
+                        // 归一化后，直接使用相同的阈值范围 [-1, 1]
+                        // 但原阈值可能受距离和速度影响，归一化后阈值应该更严格（更接近 -1）
+                        // 为了保持相似的判断逻辑，将原阈值映射到归一化阈值
+                        // 原逻辑中 -0.3f 通常表示中等相向，归一化后对应 -0.3f 到 -0.5f
+                        float normalized_threshold = fmaxf(-1.0f, collision_dot_threshold * 1.5f);  // 稍微更严格
+                        
+                        if (normalized_dot_product < normalized_threshold && closing_speed > 0.1f) {
                             critical_collision_risk = true;
                             PX4_WARN("[当前对冲] 从机%d↔飞机%d: 距离=%.2fm TTC=%.2fs 轨迹最近=%.2fm@%.1fs",
                                      vehicle_id, i, (double)distance, (double)ttc, 
@@ -596,17 +487,17 @@ void Swarm_Node::start_swarm_node()
                         // 近距离对冲（保持编队时提高阈值）
                         // 修复：主机避撞使用更敏感的近距离阈值
                         float close_distance_threshold;
-                        float close_dot_threshold;
+                        float close_normalized_threshold;
                         if (is_leader_aircraft) {
                             // 主机避撞：使用更敏感的阈值
                             close_distance_threshold = is_moving_to_target_local ? 3.5f : 3.0f;  // 主机使用更大的近距离阈值
-                            close_dot_threshold = is_moving_to_target_local ? 0.0f : -0.1f;  // 主机使用更宽松的dot阈值
+                            close_normalized_threshold = is_moving_to_target_local ? 0.0f : -0.1f;  // 主机使用更宽松的dot阈值
                         } else {
                             // 从机避撞：使用正常阈值
                             close_distance_threshold = is_moving_to_target_local ? 2.5f : 1.5f;
-                            close_dot_threshold = is_moving_to_target_local ? -0.1f : -0.3f;
+                            close_normalized_threshold = is_moving_to_target_local ? -0.1f : -0.3f;
                         }
-                        if (distance < close_distance_threshold && dot_product < close_dot_threshold) {
+                        if (distance < close_distance_threshold && normalized_dot_product < close_normalized_threshold && closing_speed > 0.1f) {
                             critical_collision_risk = true;
                             PX4_WARN("[近距对冲] 从机%d↔飞机%d: %.2fm TTC=%.2fs",
                                      vehicle_id, i, (double)distance, (double)ttc);
@@ -810,8 +701,14 @@ void Swarm_Node::start_swarm_node()
           // 修复：检查是否有主机在避撞范围内，主机避撞需要更强的位置修正
           bool has_leader_collision = false;
           if (collision_risk) {
+              uint64_t current_time_leader = hrt_absolute_time();
               for (int i = 0; i < MAX_SWARM_SIZE; i++) {
                   if (other_aircraft[i].valid && other_aircraft[i].is_leader) {
+                      // 检查时间戳，只使用2秒内的数据
+                      uint64_t age = current_time_leader - other_aircraft[i].timestamp;
+                      if (age >= 2000000) { // 超过2秒，跳过
+                          continue;
+                      }
                       matrix::Vector3f leader_pos(other_aircraft[i].x, other_aircraft[i].y, 0.0f);
                       matrix::Vector3f my_pos(veicle_own_position(0), veicle_own_position(1), 0.0f);
                       float leader_distance = (leader_pos - my_pos).norm();
@@ -939,38 +836,10 @@ void Swarm_Node::start_swarm_node()
 	    // 处理数据订阅
 	    swarm_start_flag_s _start_flag{};
 	    vehicle_status_s _state{};
-	     leader_info_s _leader_info{};
+	    leader_info_s _leader_info{};
 
-	    //if (_swarm_start_flag_sub.updated()) {
-	        _swarm_start_flag_sub.copy(&_start_flag);
-	    //}
-
-	    //if (_vehicle_status_sub.updated()) {
-	        _vehicle_status_sub.copy(&_state);
-	   // }
-
-
-	    // 移除无条件的leader_info_copy，避免数据竞争
-	    // leader_info的读取在主从跟随逻辑中处理
-
-	    follower_info_s _follower_info{};
-		_follower_info_sub.copy(&_follower_info);
-		//在这里补一个对于其他飞机消息的更新
-
-		update_uav_info();
-
-		//double distance=0;
-		//distance = calculate_distance(uav_info_cache[3].lat,uav_info_cache[3].lon,uav_info_cache[2].lat,uav_info_cache[2].lon);
-		//PX4_INFO("distance is %f",distance);
-		// PX4_INFO("The uav_info_cache[2].lat is %f",uav_info_cache[2].lat);
-		// PX4_INFO("The uav_info_cache[2].lon is %f",uav_info_cache[2].lon);
-		// PX4_INFO("The uav_info_cache[3].lat is %f",uav_info_cache[3].lat);
-		// PX4_INFO("The uav_info_cache[3].lon is %f",uav_info_cache[3].lon);
-		// PX4_INFO("The uav_info_cache[4].lat is %f",uav_info_cache[4].lat);
-		// PX4_INFO("The uav_info_cache[4].lon is %f",uav_info_cache[4].lon);
-		// PX4_INFO("The uav_info_cache[5].lat is %f",uav_info_cache[5].lat);
-		// PX4_INFO("The uav_info_cache[5].lon is %f",uav_info_cache[5].lon);
-
+	    _swarm_start_flag_sub.copy(&_start_flag);
+	    _vehicle_status_sub.copy(&_state);
 
 	    // 根据当前状态进行处理
 	    switch (STATE) {
@@ -1349,13 +1218,12 @@ int Swarm_Node::print_usage(const char *reason)
 	PRINT_MODULE_DESCRIPTION(
 		R"DESCR_STR(
 ### Description
-Example of a simple module running out of a work queue.
+Swarm node module for multi-UAV formation control.
 
 )DESCR_STR");
 
-	PRINT_MODULE_USAGE_NAME("work_item_example", "template");
+	PRINT_MODULE_USAGE_NAME("swarm_node", "template");
 	PRINT_MODULE_USAGE_COMMAND("start");
-	//PRINT_MODULE_USGE_DEFAULT_COMMANDS();
 
 	return 0;
 }
@@ -1363,31 +1231,6 @@ Example of a simple module running out of a work queue.
 extern "C" __EXPORT int swarm_node_main(int argc, char *argv[])
 {
 	return Swarm_Node::main(argc, argv);
-}
-
-
-// 计算两点间的 Haversine 距离（单位：米）
-double Swarm_Node::calculate_distance(double lat1, double lon1, double lat2, double lon2)
-{
-    const double R = 6371e3; // 地球半径，单位：米
-    double phi1 = lat1 * M_PI / 180.0;
-    double phi2 = lat2 * M_PI / 180.0;
-    double delta_phi = (lat2 - lat1) * M_PI / 180.0;
-    double delta_lambda = (lon2 - lon1) * M_PI / 180.0;
-
-    double a = sin(delta_phi / 2) * sin(delta_phi / 2) +
-               cos(phi1) * cos(phi2) *
-               sin(delta_lambda / 2) * sin(delta_lambda / 2);
-    double c = 2 * atan2(sqrt(a), sqrt(1 - a));
-
-    return R * c; // 返回距离，单位：米
-}
-
-
-
-void Swarm_Node::update_uav_info() {
-
-    
 }
 
 

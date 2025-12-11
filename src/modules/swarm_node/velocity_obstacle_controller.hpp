@@ -138,22 +138,6 @@ public:
         _last_result = AvoidanceResult{};
     }
 
-    /**
-     * @brief 检查是否需要避撞
-     * @param other_aircraft 其他飞机位置数组
-     * @param max_aircraft_count 最大飞机数量
-     * @param current_pos 当前位置
-     * @param current_vel 当前速度
-     * @param current_vehicle_id 本机ID
-     * @return true 表示需要避撞
-     */
-    bool needs_avoidance(
-        const OtherVehiclePosition* other_aircraft,
-        int max_aircraft_count,
-        const matrix::Vector3f& current_pos,
-        const matrix::Vector3f& current_vel,
-        uint8_t current_vehicle_id
-    );
 
 private:
     VOConfig _config;

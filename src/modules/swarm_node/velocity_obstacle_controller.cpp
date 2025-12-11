@@ -130,7 +130,7 @@ VelocityObstacleController::calculate_safe_velocity(
             // 修复：降低速度阈值从1.5m/s到0.3m/s，确保低速时也能预测路径
             // 同时延长TTC阈值，给低速情况更多时间检测
             float ttc_threshold = (effective_speed > 1.0f) ? 2.0f : 3.0f;  // 低速时延长预测时间
-            if (ttc > 0.0f && ttc < ttc_threshold && effective_speed > 0.3f) {
+            if (ttc > 0.0f && ttc < ttc_threshold && effective_speed > 0.3f && distance_xy > 0.1f) {
                 // TTC有效，说明正在接近，可能在路径上
                 // 计算相对速度在相对位置方向的投影（接近速度）
                 matrix::Vector3f relative_dir = relative_pos_xy.normalized();
@@ -452,6 +452,10 @@ VelocityObstacleController::calculate_radial_repulsive_force_2d(
 
     matrix::Vector3f direction_xy = current_pos - obstacle_pos;
     direction_xy(2) = 0.0f;
+    float dir_magnitude = direction_xy.norm();
+    if (dir_magnitude < 0.1f) {
+        return matrix::Vector3f(0.0f, 0.0f, 0.0f);
+    }
     direction_xy = direction_xy.normalized();
 
     // 立方衰减公式
@@ -540,6 +544,10 @@ VelocityObstacleController::limit_vector(const matrix::Vector3f& vec, float max_
         return vec;
     }
 
+    if (magnitude < 0.1f) {
+        return matrix::Vector3f(0.0f, 0.0f, 0.0f);
+    }
+
     return vec.normalized() * max_magnitude;
 }
 
@@ -562,41 +570,4 @@ VelocityObstacleController::calculate_ttc(
 
     return distance / closing_speed;
 }
-
-bool
-VelocityObstacleController::needs_avoidance(
-    const OtherVehiclePosition* other_aircraft,
-    int max_aircraft_count,
-    const matrix::Vector3f& current_pos,
-    const matrix::Vector3f& current_vel,
-    uint8_t current_vehicle_id)
-{
-    if (!_config.enable_avoidance) {
-        return false;
-    }
-
-    for (int i = 0; i < max_aircraft_count; i++) {
-        const OtherVehiclePosition& aircraft = other_aircraft[i];
-
-        if (!aircraft.valid || aircraft.mavid == current_vehicle_id) {
-            continue;
-        }
-
-        if (!_config.enable_leader_avoidance && aircraft.is_leader) {
-            continue;
-        }
-
-        matrix::Vector3f obstacle_pos(aircraft.x, aircraft.y, aircraft.z);
-        matrix::Vector3f relative_pos = current_pos - obstacle_pos;
-        relative_pos(2) = 0.0f;  // 只考虑XY
-        float distance = relative_pos.norm();
-
-        if (distance < _config.safety_radius) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 

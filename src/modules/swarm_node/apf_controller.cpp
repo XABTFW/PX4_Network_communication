@@ -144,113 +144,6 @@ matrix::Vector3f APFController::calculate_avoidance_vector(
     return total_avoidance_vector;
 }
 
-matrix::Vector3f APFController::calculate_radial_repulsive_force(
-    const matrix::Vector3f& obstacle_pos,
-    const matrix::Vector3f& current_pos,
-    float distance)
-{
-    matrix::Vector3f direction = current_pos - obstacle_pos;
-
-    if (distance < 0.1f) {
-        return matrix::Vector3f(0.0f, 0.0f, 0.0f);
-    }
-
-    direction = direction.normalized();
-
-    float repulsive_magnitude;
-
-    if (distance < _config.danger_radius) {
-        // 危险范围内，强烈斥力
-        repulsive_magnitude = _config.repulsive_gain *
-                             (1.0f/_config.danger_radius - 1.0f/distance) * 2.0f;
-    } else if (distance < _config.safety_radius) {
-        // 安全范围内，中等斥力
-        repulsive_magnitude = _config.repulsive_gain *
-                             (1.0f/distance - 1.0f/_config.safety_radius);
-    } else if (distance < _config.max_avoidance_distance) {
-        // 避障范围内，渐弱斥力
-        float normalized_distance = (distance - _config.safety_radius) /
-                                   (_config.max_avoidance_distance - _config.safety_radius);
-        repulsive_magnitude = _config.repulsive_gain * 0.1f * (1.0f - normalized_distance);
-    } else {
-        return matrix::Vector3f(0.0f, 0.0f, 0.0f);
-    }
-
-    return direction * repulsive_magnitude;
-}
-
-matrix::Vector3f APFController::calculate_clockwise_tangential_force(
-    const matrix::Vector3f& obstacle_pos,
-    const matrix::Vector3f& current_pos,
-    const matrix::Vector3f& obstacle_vel,
-    float distance)
-{
-    if (distance < 0.1f) {
-        return matrix::Vector3f(0.0f, 0.0f, 0.0f);
-    }
-
-    // 1. 计算相对位置向量（从障碍物指向自己）
-    matrix::Vector3f relative_pos = current_pos - obstacle_pos;
-    relative_pos = relative_pos.normalized();
-
-    // 2. 计算相对速度向量
-    matrix::Vector3f relative_vel = -obstacle_vel; // 假设本机静止，障碍物运动
-
-    // 3. 计算顺时针切线方向
-    matrix::Vector3f tangential_direction = get_clockwise_perpendicular(relative_pos);
-
-    // 4. 计算相对速度在切线方向的投影
-    float tangential_component = relative_vel.dot(tangential_direction);
-
-    // 5. 计算切线力大小（距离越近，切线力越大；相对速度越大，切线力越大）
-    float distance_factor = 1.0f - (distance / _config.max_avoidance_distance);
-    distance_factor = math::max(distance_factor, 0.0f);
-
-    float velocity_factor = math::min(fabs(tangential_component) / 2.0f, 1.0f);
-
-    float tangential_magnitude = _config.tangential_gain * distance_factor * velocity_factor;
-
-    // 6. 顺时针方向为正
-    if (tangential_component < 0) {
-        tangential_magnitude = -tangential_magnitude;
-    }
-
-    return tangential_direction * tangential_magnitude;
-}
-
-bool APFController::needs_avoidance(
-    const OtherVehiclePosition* other_aircraft,
-    int max_aircraft_count,
-    const matrix::Vector3f& current_pos,
-    uint8_t current_vehicle_id)
-{
-    if (!_config.enable_avoidance) {
-        return false;
-    }
-
-    for (int i = 0; i < max_aircraft_count; i++) {
-        const OtherVehiclePosition& aircraft = other_aircraft[i];
-
-        if (!aircraft.valid || aircraft.mavid == current_vehicle_id) {
-            continue;
-        }
-
-        if (!_config.enable_leader_avoidance && aircraft.is_leader) {
-            continue;
-        }
-
-        matrix::Vector3f obstacle_pos(aircraft.x, aircraft.y, aircraft.z);
-        matrix::Vector3f relative_pos = current_pos - obstacle_pos;
-        float distance = relative_pos.norm();
-
-        if (distance < _config.safety_radius) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 matrix::Vector3f APFController::calculate_radial_repulsive_force_2d(
     const matrix::Vector3f& obstacle_pos,
     const matrix::Vector3f& current_pos,
@@ -355,6 +248,10 @@ matrix::Vector3f APFController::limit_vector(const matrix::Vector3f& vec, float 
 
     if (magnitude <= max_magnitude) {
         return vec;
+    }
+
+    if (magnitude < 0.1f) {
+        return matrix::Vector3f(0.0f, 0.0f, 0.0f);
     }
 
     return vec.normalized() * max_magnitude;

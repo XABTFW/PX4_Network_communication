@@ -125,52 +125,11 @@ public:
         _last_result = AvoidanceResult{};
     }
 
-    /**
-     * @brief 检查是否需要避撞
-     * @param other_aircraft 其他飞机位置数组
-     * @param max_aircraft_count 最大飞机数量
-     * @param current_pos 当前位置
-     * @param current_vehicle_id 本机ID
-     * @return true 表示需要避撞
-     */
-    bool needs_avoidance(
-        const OtherVehiclePosition* other_aircraft,
-        int max_aircraft_count,
-        const matrix::Vector3f& current_pos,
-        uint8_t current_vehicle_id
-    );
 
 private:
     APFConfig _config;
     AvoidanceResult _last_result{};
 
-    /**
-     * @brief 计算径向斥力向量 (远离障碍物)
-     * @param obstacle_pos 障碍物位置
-     * @param current_pos 当前位置
-     * @param distance 距离
-     * @return 径向斥力向量
-     */
-    matrix::Vector3f calculate_radial_repulsive_force(
-        const matrix::Vector3f& obstacle_pos,
-        const matrix::Vector3f& current_pos,
-        float distance
-    );
-
-    /**
-     * @brief 计算顺时针横向切力向量 (侧向避撞)
-     * @param obstacle_pos 障碍物位置
-     * @param current_pos 当前位置
-     * @param obstacle_vel 障碍物速度
-     * @param distance 距离
-     * @return 横向切力向量
-     */
-    matrix::Vector3f calculate_clockwise_tangential_force(
-        const matrix::Vector3f& obstacle_pos,
-        const matrix::Vector3f& current_pos,
-        const matrix::Vector3f& obstacle_vel,
-        float distance
-    );
 
     /**
      * @brief 限制向量大小
@@ -179,16 +138,6 @@ private:
      * @return 限制后的向量
      */
     matrix::Vector3f limit_vector(const matrix::Vector3f& vec, float max_magnitude);
-
-    /**
-     * @brief 计算顺时针垂直向量
-     * @param vec 原向量
-     * @return 顺时针垂直向量
-     */
-    matrix::Vector3f get_clockwise_perpendicular(const matrix::Vector3f& vec) {
-        // 对于XY平面，顺时针垂直向量为 (y, -x, 0)
-        return matrix::Vector3f(vec(1), -vec(0), 0.0f);
-    }
 
     /**
      * @brief 计算2D径向斥力向量 (仅XY平面)

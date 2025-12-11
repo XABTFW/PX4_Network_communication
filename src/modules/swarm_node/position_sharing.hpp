@@ -10,7 +10,7 @@
 #include <uORB/topics/sensor_gps.h>
 #include <lib/geo/geo.h>
 
-// 定义其他飞机位置结构体（增强版）
+// 定义其他飞机位置结构体
 struct OtherVehiclePosition {
     uint8_t mavid;
     float x, y, z;
@@ -18,16 +18,8 @@ struct OtherVehiclePosition {
     float yaw;
     uint64_t timestamp;
     bool valid = false;
-
-    // 🆕 新增字段用于更好的数据管理
-    uint64_t last_update_time = 0;     // 最后更新时间
-    uint32_t update_count = 0;         // 更新次数统计
-    float distance = 0.0f;             // 到本机的距离（需要计算）
     bool is_leader = false;            // 是否为主机
-    uint8_t signal_quality = 100;      // 信号质量（0-100）
 };
-
-//#include "apf_controller.h"
 
 #define MAX_SWARM_SIZE 10
 
@@ -68,11 +60,6 @@ public:
 	const OtherVehiclePosition* get_other_vehicles() const { return _other_vehicles; }
 
 	/**
-	 * @brief 获取主机位置（方便从机使用）
-	 */
-    const OtherVehiclePosition& get_host_position() const;
-
-	/**
 	 * @brief 获取有效飞机数量
 	 */
 	int get_valid_vehicle_count() const;
@@ -90,30 +77,6 @@ public:
 	                             float vx, float vy, float vz, float yaw,
 	                             uint64_t timestamp, bool is_leader = false);
 
-	/**
-	 * @brief 计算到指定飞机的距离
-	 * @param mavid 目标飞机ID
-	 * @param my_x, my_y, my_z 本机位置
-	 * @return 距离（米）
-	 */
-	float calculate_distance_to(uint8_t mavid, float my_x, float my_y, float my_z) const;
-
-	/**
-	 * @brief 获取指定半径内的所有飞机（用于避撞）
-	 * @param my_x, my_y, my_z 本机位置
-	 * @param radius 搜索半径（米）
-	 * @param max_results 最大结果数量
-	 * @param results 输出结果数组
-	 * @return 找到的飞机数量
-	 */
-	int get_nearby_vehicles(float my_x, float my_y, float my_z, float radius,
-	                       OtherVehiclePosition* results, int max_results) const;
-
-	/**
-	 * @brief 清理过期数据（默认2秒超时）
-	 * @param timeout_ms 数据过期时间（毫秒）
-	 */
-	void cleanup_expired_data(uint64_t timeout_ms = 2000);
 
 private:
 	// uORB发布和订阅
@@ -124,16 +87,4 @@ private:
 	// 其他飞机位置数组（索引对应vehicle_id）
     OtherVehiclePosition _other_vehicles[MAX_SWARM_SIZE];
 
-    // 缓存主机最后一次有效状态，避免短暂丢包时误用其他飞机
-    OtherVehiclePosition _last_host{};
-
-    // 编队状态变量
-    uint8_t formation_state = 0;
-    uint8_t formation_type = 0;
-    uint8_t last_broadcast_formation_type = 0;
-
 };
-
-
-
-

@@ -141,11 +141,16 @@ bool FormationPlanner::predict_collision(
     bool will_collide = (distance_at_cpa < _config.collision_threshold);
 
     // 额外检查：如果是相向而行（对冲），降低阈值
-    float dot_product = relative_pos.dot(relative_vel);
-    // 提高对冲判断阈值：只有真正高速对冲且距离很近时才判断为碰撞
-    if (dot_product < -0.3f && current_distance < 5.0f && relative_speed > 1.0f) {
-        // 对冲情况，更严格的碰撞判断（提高阈值，避免误判）
-        will_collide = (distance_at_cpa < _config.collision_threshold * 1.2f);
+    // 修复：使用归一化向量计算点积，确保判断准确
+    if (current_distance > 0.1f) {  // 避免除零
+        matrix::Vector3f relative_dir = relative_pos.normalized();
+        float normalized_dot_product = relative_dir.dot(relative_vel.normalized());
+        // 归一化后的点积范围是 [-1, 1]，-0.3 表示大约 107 度的夹角（相向而行）
+        // 提高对冲判断阈值：只有真正高速对冲且距离很近时才判断为碰撞
+        if (normalized_dot_product < -0.3f && current_distance < 5.0f && relative_speed > 1.0f) {
+            // 对冲情况，更严格的碰撞判断（提高阈值，避免误判）
+            will_collide = (distance_at_cpa < _config.collision_threshold * 1.2f);
+        }
     }
 
     return will_collide;
@@ -173,17 +178,23 @@ matrix::Vector3f FormationPlanner::generate_detour_waypoint(
 
     // 计算顺时针垂直方向（右侧绕行）
     matrix::Vector3f perpendicular(to_target(1), -to_target(0), 0.0f);
+    float perp_magnitude = perpendicular.norm();
     
     // 判断冲突点在路径的哪一侧
     float cross_product = to_target(0) * to_conflict(1) - to_target(1) * to_conflict(0);
     
     // 如果冲突点在左侧，向右绕；如果在右侧，向左绕
-    if (cross_product > 0.0f) {
-        // 冲突点在左侧，向右（顺时针）绕行
-        perpendicular = perpendicular.normalized() * _config.detour_distance;
+    if (perp_magnitude > 0.1f) {
+        if (cross_product > 0.0f) {
+            // 冲突点在左侧，向右（顺时针）绕行
+            perpendicular = perpendicular.normalized() * _config.detour_distance;
+        } else {
+            // 冲突点在右侧，向左（逆时针）绕行
+            perpendicular = perpendicular.normalized() * (-_config.detour_distance);
+        }
     } else {
-        // 冲突点在右侧，向左（逆时针）绕行
-        perpendicular = perpendicular.normalized() * (-_config.detour_distance);
+        // 如果垂直向量为零，使用默认方向
+        perpendicular = matrix::Vector3f(1.0f, 0.0f, 0.0f) * _config.detour_distance;
     }
 
     // 生成绕行航点：路径中点 + 垂直偏移

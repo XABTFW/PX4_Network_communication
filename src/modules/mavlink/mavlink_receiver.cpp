@@ -3543,8 +3543,8 @@ MavlinkReceiver::handle_message_swarm_start_flag(mavlink_message_t *msg){
 	swarm_start_flag_s _swarm_start_flag{};
 
 
-	PX4_INFO("从机：msg->sysid is %d",msg->sysid);
-	PX4_INFO("从机：msg->compid is %d",msg->compid);
+	PX4_INFO("从机：msg->sysid is %u", (unsigned int)msg->sysid);
+	PX4_INFO("从机：msg->compid is %u", (unsigned int)msg->compid);
 
 	//这个55还发不发，需要和地面站进行相互确认
 	if(_group_id.leader == 0){
@@ -3627,7 +3627,7 @@ MavlinkReceiver::handle_message_leader_info(mavlink_message_t *msg)
 			static uint64_t last_leader_log = 0;
 			uint64_t now = hrt_absolute_time();
 			if (now - last_leader_log > 2000000) {
-				PX4_INFO("[MAVLink接收] 收到主机%d的LEADER_INFO消息，已发布为leader_info", _leader_info_msg.mavid);
+				PX4_INFO("[MAVLink接收] 收到主机%lu的LEADER_INFO消息，已发布为leader_info", (unsigned long)_leader_info_msg.mavid);
 				last_leader_log = now;
 			}
 		} else {
