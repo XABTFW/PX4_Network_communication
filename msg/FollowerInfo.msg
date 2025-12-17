@@ -10,3 +10,4 @@ float64 vz	  	  # follower velocity of vz
 float64 yaw	  	  # follower yaw (only for multirotors), in rad [-PI..PI), NaN = hold current yaw
 float64 yawspeed  # follower yawspeed (only for multirotors, in rad/s)
 uint32 land       # ture if leader landing
+uint8 at_target   # 1 if follower has reached target position (for collision avoidance priority)

@@ -5,7 +5,7 @@
 
 /**
  * @brief 编队路径规划器 - 预测性避撞
- * 
+ *
  * 针对编队切换时的交叉对冲场景，提前规划绕行路径
  */
 class FormationPlanner {
@@ -14,6 +14,7 @@ public:
         float prediction_time = 3.0f;        // 预测未来3秒
         float collision_threshold = 2.0f;    // 碰撞阈值2米
         float detour_distance = 3.0f;        // 绕行距离3米
+        float max_detection_distance = 7.0f; // 最大检测距离7米，超过此距离不进行预测避撞
         bool enable_planning = true;
     };
 
@@ -33,7 +34,7 @@ public:
 
     /**
      * @brief 规划编队切换路径，检测并避免对冲碰撞
-     * 
+     *
      * @param current_pos 当前位置
      * @param target_pos 目标位置（编队位置）
      * @param current_vel 当前速度

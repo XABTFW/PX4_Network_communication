@@ -60,7 +60,7 @@ public:
     struct VOConfig {
         float safety_radius = 2.5f;              // 安全半径 (米)
         float danger_radius = 1.2f;              // 危险半径 (米)
-        float max_avoidance_distance = 5.0f;     // 最大避障距离 (米)
+        float max_avoidance_distance = 7.0f;     // 最大避障距离 (米) - 硬性上限，超过7米不触发任何避撞
         float repulsive_gain = 2.5f;              // 斥力增益
         float tangential_gain = 2.0f;             // 横向切力增益
         float max_avoidance_force = 3.0f;        // 最大避撞力 (米/秒)
@@ -102,10 +102,10 @@ public:
 
     /**
      * @brief 计算安全的目标速度和位置修正量
-     * 
+     *
      * 基于速度障碍方法，考虑当前速度、目标速度和相对速度，
      * 计算安全的目标速度，并转换为位置修正量。
-     * 
+     *
      * @param current_pos 当前位置
      * @param current_vel 当前速度
      * @param desired_vel 期望速度（来自位置控制）
@@ -145,9 +145,9 @@ private:
 
     /**
      * @brief 计算速度障碍（Velocity Obstacle）
-     * 
+     *
      * 基于相对位置和相对速度，计算速度障碍区域
-     * 
+     *
      * @param relative_pos 相对位置（从障碍物指向自己）
      * @param relative_vel 相对速度
      * @param distance 距离

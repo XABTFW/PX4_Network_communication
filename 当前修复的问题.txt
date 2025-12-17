@@ -1,0 +1,32 @@
+## 删除的函数
+1 PositionSharing:
+    calculate_distance_to()
+    get_nearby_vehicles()
+
+2 VelocityObstacleController:
+    needs_avoidance()
+
+3 APFController:
+    needs_avoidance()
+    calculate_radial_repulsive_force() 
+    calculate_clockwise_tangential_force()
+    get_clockwise_perpendicular()
+
+## 删除的变量
+
+ _formation_switch_threshold 
+
+## 归一化问题修复
+
+1 swarm_nodecpp:435  归一化 relative_pos 前检查 distance > 01f
+2 velocity_obstacle_controllercpp:136  归一化 relative_pos_xy 前检查 distance_xy > 01f
+3 velocity_obstacle_controllercpp:455  归一化 direction_xy 前检查零向量
+4 velocity_obstacle_controllercpp:543  limit_vector() 添加零向量检查
+5 apf_controllercpp:253  limit_vector() 添加零向量检查
+6 formation_plannercpp:188  归一化 perpendicular 前检查零向量，并提供默认方向
+
+## 代码优化
+
+ 移除重复的 relative_dir 归一化计算
+ 简化 new_target_position 为直接使用 _final_target
+ 简化逻辑：formation_switching || enable_path_planning → enable_path_planning

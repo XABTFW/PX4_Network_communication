@@ -157,22 +157,22 @@ PARAM_DEFINE_FLOAT(SWARM_APF_SAFE_R, 2.5f);
  * @decimal 1
  * @group Swarm
  */
-PARAM_DEFINE_FLOAT(SWARM_APF_DANGER, 1.2f);
+PARAM_DEFINE_FLOAT(SWARM_APF_DANGER, 2.0f);
 
 /**
  * APF maximum avoidance distance
  *
  * Maximum distance at which the aircraft starts to apply avoidance force.
  * Beyond this distance, no avoidance force will be applied.
- * Note: Set to 5.0m to work with 7m formation spacing (avoidance starts before formation distance).
+ * Note: Set to 7.0m as hard limit - no avoidance beyond 7m regardless of speed.
  *
  * @unit m
- * @min 5.0
+ * @min 1.0
  * @max 50.0
  * @decimal 1
  * @group Swarm
  */
-PARAM_DEFINE_FLOAT(SWARM_APF_MAXD, 5.0f);
+PARAM_DEFINE_FLOAT(SWARM_APF_MAXD, 7.0f);
 
 /**
  * APF repulsive force gain
@@ -196,11 +196,11 @@ PARAM_DEFINE_FLOAT(SWARM_APF_REP_G, 2.5f);
  * Note: Increased to 2.0 for better lateral avoidance.
  *
  * @min 0.0
- * @max 5.0
+ * @max 15.0
  * @decimal 2
  * @group Swarm
  */
-PARAM_DEFINE_FLOAT(SWARM_APF_TAN_G, 2.0f);
+PARAM_DEFINE_FLOAT(SWARM_APF_TAN_G, 5.0f);
 
 /**
  * APF maximum avoidance force magnitude
@@ -233,8 +233,8 @@ PARAM_DEFINE_INT32(SWARM_APF_LEADER, 1);
 /**
  * Swarm UAV takeoff altitude
  *
- *Set the takeoff altitude for the cluster. The aircraft first takes off 
- *from its current position to a specific altitude, then follows the 
+ *Set the takeoff altitude for the cluster. The aircraft first takes off
+ *from its current position to a specific altitude, then follows the
  * formation set by the ground station.
  *
  * @unit m

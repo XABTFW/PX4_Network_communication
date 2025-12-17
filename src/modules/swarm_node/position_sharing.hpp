@@ -19,6 +19,7 @@ struct OtherVehiclePosition {
     uint64_t timestamp;
     bool valid = false;
     bool is_leader = false;            // 是否为主机
+    bool at_target = false;            // 是否已到达目标位置（用于避撞优先级判断）
 };
 
 #define MAX_SWARM_SIZE 10
@@ -39,10 +40,12 @@ public:
 	 * @param mavid 飞机ID
 	 * @param vehicle_local_position 本地位置信息
 	 * @param sensor_gps GPS信息
+	 * @param at_target 是否已到达目标位置（用于避撞优先级）
 	 */
     void publish_position(uint8_t mavid,
                           const vehicle_local_position_s &vehicle_local_position,
-                          const sensor_gps_s &sensor_gps);
+                          const sensor_gps_s &sensor_gps,
+                          bool at_target = false);
 
 	/**
 	 * @brief 更新其他飞机位置信息（使用GPS坐标转换）
@@ -72,10 +75,11 @@ public:
 	 * @param yaw 航向
 	 * @param timestamp 时间戳
 	 * @param is_leader 是否为主机
+	 * @param at_target 是否已到达目标位置
 	 */
 	void update_vehicle_position(uint8_t mavid, float x, float y, float z,
 	                             float vx, float vy, float vz, float yaw,
-	                             uint64_t timestamp, bool is_leader = false);
+	                             uint64_t timestamp, bool is_leader = false, bool at_target = false);
 
 
 private:

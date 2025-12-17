@@ -3586,32 +3586,30 @@ MavlinkReceiver::handle_message_leader_info(mavlink_message_t *msg)
 
 		mavlink_leader_info_t  _leader_info_msg{};
 		mavlink_msg_leader_info_decode(msg, &_leader_info_msg);
-		
-		// ⭐⭐ 关键改进：支持动态选择主机，不再硬编码ID=2
+
 		// 读取SWARM_LEADER_ID参数来判断哪个是主机
 		int32_t selected_leader_id = 0;
 		param_t param_leader_id = param_find("SWARM_LEADER_ID");
 		if (param_leader_id != PARAM_INVALID) {
 			param_get(param_leader_id, &selected_leader_id);
 		}
-		
-		// 判断是否是主机：
-		// 1. 如果SWARM_LEADER_ID > 0，检查mavid是否匹配
-		// 2. 如果SWARM_LEADER_ID == 0（未设置），使用向后兼容逻辑（默认ID=2）
+
+		// ★★★ 检查是否是主机的真实位置消息（mavid >= 100 表示避撞用的真实位置）★★★
+		bool is_leader_real_pos = (_leader_info_msg.mavid >= 100);
+		uint32_t actual_mavid = is_leader_real_pos ? (_leader_info_msg.mavid - 100) : _leader_info_msg.mavid;
+
+		// 判断是否是主机
 		bool is_leader = false;
 		if (selected_leader_id > 0) {
-			// 指定模式：检查mavid是否匹配选定的主机ID
-			// ⭐ 修复类型不匹配：将int32_t转换为uint32_t进行比较
-			is_leader = (_leader_info_msg.mavid == (uint32_t)selected_leader_id);
+			is_leader = (actual_mavid == (uint32_t)selected_leader_id);
 		} else {
-			// 自动模式/向后兼容：默认ID=2为主机
-			is_leader = (_leader_info_msg.mavid == 2);
+			is_leader = (actual_mavid == 2);
 		}
-		
-		if (is_leader) {
-			// 发布为主机信息
+
+		if (is_leader && !is_leader_real_pos) {
+			// 主机的目标位置消息 → 发布到 leader_info（用于从机跟随）
 			_leader_info.timestamp = hrt_absolute_time();
-			_leader_info.mavid = _leader_info_msg.mavid;
+			_leader_info.mavid = actual_mavid;
 			_leader_info.lat = _leader_info_msg.lat;
 			_leader_info.lon = _leader_info_msg.lon;
 			_leader_info.alt = _leader_info_msg.rel_alt;
@@ -3622,18 +3620,11 @@ MavlinkReceiver::handle_message_leader_info(mavlink_message_t *msg)
 			_leader_info.yawspeed = _leader_info_msg.yaw_speed;
 			_leader_info.land = _leader_info_msg.land;
 			_leader_info_pub.publish(_leader_info);
-			
-			// 调试输出（每2秒一次）
-			static uint64_t last_leader_log = 0;
-			uint64_t now = hrt_absolute_time();
-			if (now - last_leader_log > 2000000) {
-				PX4_INFO("[MAVLink接收] 收到主机%lu的LEADER_INFO消息，已发布为leader_info", (unsigned long)_leader_info_msg.mavid);
-				last_leader_log = now;
-			}
-		} else {
-			// 发布为从机信息
+
+		} else if (is_leader && is_leader_real_pos) {
+			// ★★★ 主机的真实位置消息 → 发布到 follower_info（用于避撞）★★★
 			_follower_info.timestamp = hrt_absolute_time();
-			_follower_info.mavid = _leader_info_msg.mavid;
+			_follower_info.mavid = actual_mavid;  // 使用真实的 mavid
 			_follower_info.lat = _leader_info_msg.lat;
 			_follower_info.lon = _leader_info_msg.lon;
 			_follower_info.alt = _leader_info_msg.rel_alt;
@@ -3642,7 +3633,26 @@ MavlinkReceiver::handle_message_leader_info(mavlink_message_t *msg)
 			_follower_info.vz  = _leader_info_msg.vz;
 			_follower_info.yaw = _leader_info_msg.yaw;
 			_follower_info.yawspeed = _leader_info_msg.yaw_speed;
-			_follower_info.land = _leader_info_msg.land;
+			// 从land字段解析: Bit 0 = landing, Bit 1 = at_target
+			_follower_info.land = _leader_info_msg.land & 0x01;  // 只取Bit 0
+			_follower_info.at_target = (_leader_info_msg.land & 0x02) ? 1 : 0;  // 取Bit 1
+			_follower_info_pub.publish(_follower_info);
+
+		} else {
+			// 从机的真实位置消息 → 发布到 follower_info（用于避撞）
+			_follower_info.timestamp = hrt_absolute_time();
+			_follower_info.mavid = actual_mavid;
+			_follower_info.lat = _leader_info_msg.lat;
+			_follower_info.lon = _leader_info_msg.lon;
+			_follower_info.alt = _leader_info_msg.rel_alt;
+			_follower_info.vx  = _leader_info_msg.vx;
+			_follower_info.vy  = _leader_info_msg.vy;
+			_follower_info.vz  = _leader_info_msg.vz;
+			_follower_info.yaw = _leader_info_msg.yaw;
+			_follower_info.yawspeed = _leader_info_msg.yaw_speed;
+			// 从land字段解析: Bit 0 = landing, Bit 1 = at_target
+			_follower_info.land = _leader_info_msg.land & 0x01;  // 只取Bit 0
+			_follower_info.at_target = (_leader_info_msg.land & 0x02) ? 1 : 0;  // 取Bit 1
 			_follower_info_pub.publish(_follower_info);
 		}
 }
@@ -3653,7 +3663,7 @@ MavlinkReceiver::handle_message_test_mavlink_rx(mavlink_message_t *msg)
 {
     mavlink_test_mavlink_t mavlink_test_msg;
     mavlink_msg_test_mavlink_decode(msg, &mavlink_test_msg);
-    
+
     test_mavlink_rx_s __test_mavlink_rx;
 
     __test_mavlink_rx.test1=mavlink_test_msg.test1;
