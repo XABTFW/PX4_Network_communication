@@ -1,0 +1,24 @@
+避撞参数 (SWARM_APF_xxx)
+SWARM_APF_ENABLE - 避撞开关 (0/1)
+SWARM_APF_SAFE_R - 安全半径 (默认2.5m)
+SWARM_APF_DANGER - 危险半径 (默认1.5m)
+SWARM_APF_MAXD - 最大检测距离 (默认8m)
+SWARM_APF_REP_G - 排斥力增益 (默认2.0)
+SWARM_APF_TAN_G - 切向力增益 (默认1.5)
+SWARM_APF_MAX_F - 最大避撞力 (默认3.0)
+
+速度限制参数 (MPC_xxx)
+MPC_XY_VEL_MAX - 绝对最大水平速度 (默认6m/s)
+MPC_VEL_MANUAL - 手动模式最大速度 (默认10m/s)
+MPC_Z_VEL_MAX_UP - 最大上升速度 (默认3m/s)
+MPC_Z_VEL_MAX_DN - 最大下降速度 (默认1.5m/s)
+
+运动平滑性参数
+MPC_JERK_MAX - 最大加速度变化率 (默认5m/s³)
+MPC_ACC_HOR_MAX - 最大水平加速度 (默认2m/s²)
+
+避撞太弱: 增大 SWARM_APF_REP_G, SWARM_APF_MAX_F, 减小 SWARM_APF_SAFE_R 
+避撞太强: 减小 SWARM_APF_REP_G, SWARM_APF_MAX_F, 增大 SWARM_APF_SAFE_R 
+飞行太慢: 增大 MPC_XY_VEL_MAX, MPC_VEL_MANUAL 
+飞行太激进: 减小 MPC_JERK_MAX, MPC_ACC_HOR_MAX 
+编队太松散: 减小偏移参数 起飞撞机: 增大 SWARM_TOFF_ALT

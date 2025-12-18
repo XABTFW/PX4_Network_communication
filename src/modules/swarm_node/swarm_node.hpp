@@ -82,6 +82,22 @@ private:
 	void handle_idle_state(swarm_start_flag_s _start_flag);
 	void handle_manual_takeover(vehicle_status_s _state);
 
+	// Helper functions for start_swarm_node refactoring
+	void update_leader_info();
+	void calculate_target_position();
+	bool check_formation_switching();
+	void run_path_planning(const matrix::Vector3f& current_pos, const OtherVehiclePosition* other_aircraft,
+	                       bool formation_switching, float distance_to_target);
+	void run_collision_avoidance(const matrix::Vector3f& current_pos, const OtherVehiclePosition* other_aircraft,
+	                             float current_speed, bool need_avoidance, bool in_takeoff,
+	                             bool& collision_risk, bool& critical_risk, matrix::Vector3f& correction);
+	void apply_avoidance_correction(const matrix::Vector3f& current_pos, const OtherVehiclePosition* other_aircraft,
+	                                float current_speed, bool is_high_speed, const matrix::Vector3f& correction);
+	float calculate_filter_alpha(bool formation_switching, bool collision_risk, bool critical_risk,
+	                             float current_speed, bool enable_avoidance, bool at_target_position);
+	matrix::Vector3f calculate_final_velocity(bool formation_switching, bool collision_risk,
+	                                          bool enable_avoidance, float current_speed, bool at_target_position);
+
 	enum state {
 		INIT = 0,
 		ARM_OFFBOARD,
@@ -93,7 +109,7 @@ private:
 		DISARM,
 		IDLE
 	};
-	state STATE = INIT; 
+	state STATE = INIT;
 
 	float begin_x;
 	float begin_y;

@@ -4,7 +4,7 @@
 FormationPlanner::PlanResult FormationPlanner::plan_formation_path(
     const matrix::Vector3f& current_pos,
     const matrix::Vector3f& target_pos,
-    const matrix::Vector3f& /* current_vel */,
+    const matrix::Vector3f& current_vel,
     const OtherVehiclePosition* other_aircraft,
     int max_aircraft_count,
     uint8_t current_vehicle_id)
@@ -23,7 +23,10 @@ FormationPlanner::PlanResult FormationPlanner::plan_formation_path(
         return _last_result;
     }
 
-    // 假设以2m/s速度前往目标
+    // 路径规划：预测朝向目标飞行时的碰撞风险
+    // 使用朝向目标的假设速度，而非实际速度
+    // 因为编队切换时需要预测"即将执行的路径"，而非"当前状态"
+    (void)current_vel;  // 保留参数接口，但不使用
     matrix::Vector3f my_velocity = to_target.normalized() * 2.0f;
 
     float min_time_to_collision = 999.0f;
