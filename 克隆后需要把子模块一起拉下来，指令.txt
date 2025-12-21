@@ -1,0 +1,9 @@
+克隆时记得加 --recursive 把所有子模块一起拉下来
+git clone --recursive https://github.com/XABTFW/PX4_Swarm.git
+make px4_sitl
+
+
+
+
+如果克隆时忘了加 --recursive，后面补一下子模块
+git submodule update --init --recursive
