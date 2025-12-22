@@ -34,6 +34,14 @@
 #define MAX_UAV_COUNT 20  // 根据实际需要调整
 #define INVALID_MAVID 0
 
+// ============== 编译时常量（不需要运行时调整） ==============
+static constexpr float PATH_PLANNING_DISTANCE = 5.0f;       // 启用路径规划的最小距离
+static constexpr float WAYPOINT_REACH_DISTANCE = 1.0f;      // 航点到达判定距离
+static constexpr int PREDICTION_STEPS = 10;                 // 预测步数
+static constexpr float PREDICTION_HORIZON = 1.0f;           // 预测时间范围 (秒)
+static constexpr uint64_t DATA_VALID_TIMEOUT = 2000000;     // 数据有效超时 (微秒)
+static constexpr uint64_t LOG_INTERVAL_US = 2000000;        // 日志输出间隔 (微秒)
+
 class Swarm_Node : public ModuleBase<Swarm_Node>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
@@ -69,7 +77,41 @@ private:
 	void Run() override;
 	bool swarm_node_init();
 	void start_swarm_node();
-	bool uav_takeoff_altitude(matrix::Vector3f veicle_own_position, matrix::Vector3f target_position, matrix::Vector3f target_velocity,float takeoff_altitude,float target_yaw, float target_yawspeed);
+	bool update_leader_info(int32_t selected_leader_id);  // 更新主机信息
+	bool calculate_target_position(bool &formation_switching);  // 计算目标位置并检测编队切换
+	matrix::Vector3f handle_path_planning(const matrix::Vector3f &current_position, bool formation_switching,
+	                                      float distance_to_target, const OtherVehiclePosition *other_aircraft);  // 路径规划处理
+
+	// 避撞检测结果结构体
+	struct CollisionAvoidanceResult {
+		bool collision_risk{false};           // 是否存在碰撞风险
+		bool critical_collision_risk{false};  // 是否存在紧急碰撞风险
+		matrix::Vector3f position_correction{0.f, 0.f, 0.f};  // 位置修正量
+	};
+
+	CollisionAvoidanceResult perform_collision_avoidance(const matrix::Vector3f &current_position,
+	                                                      float current_speed_xy, bool need_avoidance,
+	                                                      bool in_takeoff_phase, const OtherVehiclePosition *other_aircraft);  // 避撞检测
+
+	void configure_vo_controller(float current_speed_xy);  // 配置速度障碍参数
+
+	void predict_trajectory_collision(const matrix::Vector3f &current_position, float current_speed_xy,
+	                                  const OtherVehiclePosition *other_aircraft,
+	                                  CollisionAvoidanceResult &result);  // 预测性轨迹碰撞检测
+
+	void apply_avoidance_correction(const matrix::Vector3f &current_position, float current_speed_xy,
+	                                const matrix::Vector3f &position_correction,
+	                                const OtherVehiclePosition *other_aircraft);  // 应用避撞修正
+
+	matrix::Vector3f calculate_final_velocity(const matrix::Vector3f &current_position, bool formation_switching,
+	                                          bool collision_risk, bool enable_avoidance_check);  // 计算最终速度
+
+	void update_setpoint_filter(float current_speed_xy, bool need_avoidance, bool formation_switching,
+	                            bool collision_risk, bool critical_collision_risk, bool enable_avoidance_check);  // 更新位置速度滤波
+
+	void unwrap_yaw();  // YAW角度展开处理
+
+	bool uav_takeoff_altitude(matrix::Vector3f vehicle_own_position, matrix::Vector3f target_position, matrix::Vector3f target_velocity, float takeoff_altitude, float target_yaw, float target_yawspeed);
 
 	void handle_parameter_update();
 	void handle_init_state();
@@ -81,22 +123,6 @@ private:
 	void handle_disarm_state(vehicle_status_s _state);
 	void handle_idle_state(swarm_start_flag_s _start_flag);
 	void handle_manual_takeover(vehicle_status_s _state);
-
-	// Helper functions for start_swarm_node refactoring
-	void update_leader_info();
-	void calculate_target_position();
-	bool check_formation_switching();
-	void run_path_planning(const matrix::Vector3f& current_pos, const OtherVehiclePosition* other_aircraft,
-	                       bool formation_switching, float distance_to_target);
-	void run_collision_avoidance(const matrix::Vector3f& current_pos, const OtherVehiclePosition* other_aircraft,
-	                             float current_speed, bool need_avoidance, bool in_takeoff,
-	                             bool& collision_risk, bool& critical_risk, matrix::Vector3f& correction);
-	void apply_avoidance_correction(const matrix::Vector3f& current_pos, const OtherVehiclePosition* other_aircraft,
-	                                float current_speed, bool is_high_speed, const matrix::Vector3f& correction);
-	float calculate_filter_alpha(bool formation_switching, bool collision_risk, bool critical_risk,
-	                             float current_speed, bool enable_avoidance, bool at_target_position);
-	matrix::Vector3f calculate_final_velocity(bool formation_switching, bool collision_risk,
-	                                          bool enable_avoidance, float current_speed, bool at_target_position);
 
 	enum state {
 		INIT = 0,
@@ -111,9 +137,6 @@ private:
 	};
 	state STATE = INIT;
 
-	float begin_x;
-	float begin_y;
-	float begin_z;
 	float target_x;
 	float target_y;
 	int vehicle_id = 1;  // 将在init()中从MAV_SYS_ID参数获取
@@ -192,6 +215,29 @@ private:
 		(ParamFloat<px4::params::SWARM_APF_REP_G>) _param_apf_repulsive_gain,
 		(ParamFloat<px4::params::SWARM_APF_TAN_G>) _param_apf_tangential_gain,
 		(ParamFloat<px4::params::SWARM_APF_MAX_F>) _param_apf_max_force,
-		(ParamInt<px4::params::SWARM_APF_LEADER>) _param_apf_enable_leader_avoidance
+		(ParamInt<px4::params::SWARM_APF_LEADER>) _param_apf_enable_leader_avoidance,
+
+		// 编队控制参数
+		(ParamFloat<px4::params::SWARM_FRM_SWTHR>) _param_formation_switch_threshold,  // 编队切换检测阈值
+		(ParamFloat<px4::params::SWARM_AVOID_DST>) _param_need_avoidance_distance,     // 需要避撞的距离阈值
+		(ParamFloat<px4::params::SWARM_AT_TGT_D>) _param_at_target_distance,           // 判定到达目标的距离
+		(ParamFloat<px4::params::SWARM_AT_TGT_V>) _param_at_target_speed,              // 判定到达目标的速度
+		(ParamFloat<px4::params::SWARM_MAX_SPD>) _param_max_formation_speed,           // 编队切换最大速度
+		(ParamFloat<px4::params::SWARM_HI_SPD>) _param_high_speed_threshold,           // 高速模式阈值
+		(ParamFloat<px4::params::SWARM_LO_SPD>) _param_low_speed_threshold,            // 低速模式阈值
+		(ParamFloat<px4::params::SWARM_FLT_FRM>) _param_filter_alpha_formation,        // 编队跟随滤波系数
+		(ParamFloat<px4::params::SWARM_FLT_SWT>) _param_filter_alpha_switching,        // 编队切换滤波系数
+
+		// 从机碰撞检测阈值
+		(ParamFloat<px4::params::SWARM_F_COL_D>) _param_collision_dist_follower,       // 从机碰撞检测距离
+		(ParamFloat<px4::params::SWARM_F_CLS_D>) _param_close_dist_follower,           // 从机近距离阈值
+		(ParamFloat<px4::params::SWARM_F_CRT_D>) _param_critical_dist_follower,        // 从机紧急距离阈值
+		(ParamFloat<px4::params::SWARM_F_WRN_D>) _param_warning_dist_follower,         // 从机警告距离阈值
+
+		// 主机碰撞检测阈值
+		(ParamFloat<px4::params::SWARM_L_COL_D>) _param_collision_dist_leader,         // 主机碰撞检测距离
+		(ParamFloat<px4::params::SWARM_L_CLS_D>) _param_close_dist_leader,             // 主机近距离阈值
+		(ParamFloat<px4::params::SWARM_L_CRT_D>) _param_critical_dist_leader,          // 主机紧急距离阈值
+		(ParamFloat<px4::params::SWARM_L_WRN_D>) _param_warning_dist_leader            // 主机警告距离阈值
 	)
 };

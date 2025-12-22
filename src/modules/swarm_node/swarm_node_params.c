@@ -243,3 +243,233 @@ PARAM_DEFINE_INT32(SWARM_APF_LEADER, 1);
  * @group Swarm
  */
 PARAM_DEFINE_FLOAT(SWARM_TOFF_ALT, 5.0f);
+
+// ============== 编队控制参数 ==============
+
+/**
+ * Formation switch detection threshold
+ *
+ * Distance threshold for detecting formation switching (target position jump).
+ * When target position changes more than this value, formation switching is triggered.
+ *
+ * @unit m
+ * @min 1.0
+ * @max 20.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_FRM_SWTHR, 3.0f);
+
+/**
+ * Need avoidance distance threshold
+ *
+ * Distance to target below which collision avoidance is disabled.
+ * When closer than this to target, avoidance is not needed.
+ *
+ * @unit m
+ * @min 1.0
+ * @max 20.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_AVOID_DST, 3.0f);
+
+/**
+ * At target distance threshold
+ *
+ * Distance threshold for determining if aircraft has reached target position.
+ *
+ * @unit m
+ * @min 0.5
+ * @max 10.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_AT_TGT_D, 2.0f);
+
+/**
+ * At target speed threshold
+ *
+ * Speed threshold for determining if aircraft has reached target position.
+ *
+ * @unit m/s
+ * @min 0.1
+ * @max 5.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_AT_TGT_V, 0.5f);
+
+/**
+ * Maximum formation speed
+ *
+ * Maximum speed during formation switching maneuvers.
+ *
+ * @unit m/s
+ * @min 1.0
+ * @max 20.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_MAX_SPD, 6.0f);
+
+/**
+ * High speed mode threshold
+ *
+ * Speed above which high-speed avoidance mode is activated.
+ *
+ * @unit m/s
+ * @min 0.5
+ * @max 10.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_HI_SPD, 2.0f);
+
+/**
+ * Low speed mode threshold
+ *
+ * Speed below which low-speed avoidance mode is activated.
+ *
+ * @unit m/s
+ * @min 0.1
+ * @max 5.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_LO_SPD, 1.0f);
+
+/**
+ * Formation following filter alpha
+ *
+ * Low-pass filter coefficient for smooth formation following.
+ * Lower values = smoother but slower response.
+ *
+ * @min 0.01
+ * @max 1.0
+ * @decimal 2
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_FLT_FRM, 0.1f);
+
+/**
+ * Formation switching filter alpha
+ *
+ * Low-pass filter coefficient during formation switching.
+ * Higher than normal for faster response during transitions.
+ *
+ * @min 0.01
+ * @max 1.0
+ * @decimal 2
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_FLT_SWT, 0.15f);
+
+// ============== 从机碰撞检测阈值 ==============
+
+/**
+ * Follower collision detection distance
+ *
+ * Distance at which follower starts collision detection with other aircraft.
+ *
+ * @unit m
+ * @min 1.0
+ * @max 20.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_F_COL_D, 4.0f);
+
+/**
+ * Follower close distance threshold
+ *
+ * Close proximity threshold for follower collision avoidance.
+ *
+ * @unit m
+ * @min 0.5
+ * @max 10.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_F_CLS_D, 2.5f);
+
+/**
+ * Follower critical distance threshold
+ *
+ * Critical/emergency distance threshold for follower.
+ *
+ * @unit m
+ * @min 0.5
+ * @max 10.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_F_CRT_D, 2.5f);
+
+/**
+ * Follower warning distance threshold
+ *
+ * Warning distance threshold for follower collision detection.
+ *
+ * @unit m
+ * @min 1.0
+ * @max 15.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_F_WRN_D, 4.0f);
+
+// ============== 主机碰撞检测阈值 ==============
+
+/**
+ * Leader collision detection distance
+ *
+ * Distance at which collision detection with leader aircraft starts.
+ * Larger than follower for extra safety margin.
+ *
+ * @unit m
+ * @min 2.0
+ * @max 30.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_L_COL_D, 7.0f);
+
+/**
+ * Leader close distance threshold
+ *
+ * Close proximity threshold when near leader aircraft.
+ *
+ * @unit m
+ * @min 1.0
+ * @max 15.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_L_CLS_D, 5.0f);
+
+/**
+ * Leader critical distance threshold
+ *
+ * Critical/emergency distance threshold when near leader.
+ *
+ * @unit m
+ * @min 1.0
+ * @max 15.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_L_CRT_D, 4.5f);
+
+/**
+ * Leader warning distance threshold
+ *
+ * Warning distance threshold for leader collision detection.
+ *
+ * @unit m
+ * @min 2.0
+ * @max 20.0
+ * @decimal 1
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_L_WRN_D, 6.0f);
