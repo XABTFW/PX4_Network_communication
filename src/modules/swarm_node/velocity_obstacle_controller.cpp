@@ -123,7 +123,6 @@ VelocityObstacleController::calculate_safe_velocity(
                 min_ttc = ttc;
                 _last_result.time_to_collision = ttc;
             }
-
             // 判断飞机是否在路径上（会碰撞）
             bool on_path = false;
             float path_collision_risk = 0.0f;

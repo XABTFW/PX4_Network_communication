@@ -932,7 +932,7 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, leader_info_s _le
 
 	// 从机：检查是否处于 OFFBOARD 模式（主机已在上面 return）
 	if (_state.nav_state != vehicle_status_s::NAVIGATION_STATE_OFFBOARD) {
-		// 判断是否人为接管
+		// 判断是否人为接管或被切换到其他模式执行独立任务
 		if (_state.nav_state == vehicle_status_s::NAVIGATION_STATE_POSCTL ||
 		    _state.nav_state == vehicle_status_s::NAVIGATION_STATE_ALTCTL ||
 		    _state.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL ||
@@ -940,6 +940,31 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, leader_info_s _le
 		    _state.nav_state == vehicle_status_s::NAVIGATION_STATE_ACRO) {
 			PX4_WARN("Manual takeover detected, not switching back to OFFBOARD");
 			return;
+
+		} else if (_state.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
+			   _state.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER ||
+			   _state.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_RTL ||
+			   _state.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_LAND) {
+			// 从机被切换到AUTO模式执行独立任务，不再跟随但保持避撞
+			static uint64_t last_independent_log = 0;
+			uint64_t now = hrt_absolute_time();
+			if (now - last_independent_log > 2000000) {
+				PX4_INFO("[独立模式] 从机%d: 执行独立任务(nav_state=%d)，保持避撞", vehicle_id, _state.nav_state);
+				last_independent_log = now;
+			}
+
+			// 继续发布位置信息，供其他飞机避撞使用
+			_vehicle_local_position_sub.copy(&_vehicle_local_position);
+			_sensor_gps_sub.copy(&_sensor_gps);
+			_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps, true);
+
+			// 持续发送OFFBOARD心跳信号，保持切回OFFBOARD的能力
+			// 发送当前位置作为目标，不会影响AUTO模式的任务执行
+			matrix::Vector3f current_pos(_vehicle_local_position.x, _vehicle_local_position.y, _vehicle_local_position.z);
+			matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
+			control_instance::getInstance()->Control_pos_vel_yaw(current_pos, zero_vel, _vehicle_local_position.heading, 0.f);
+			return;
+
 		} else {
 			PX4_WARN("Follower accidentally left OFFBOARD, attempting to re-enter...");
 			control_instance::getInstance()->Change_offborad();

@@ -44,7 +44,7 @@
  * @increment 1
  * @group Multicopter Position Control
  */
-PARAM_DEFINE_FLOAT(MPC_XY_VEL_MAX, 10.f);
+PARAM_DEFINE_FLOAT(MPC_XY_VEL_MAX, 5.f);
 
 /**
  * Maximum ascent velocity
