@@ -20,7 +20,7 @@
 #include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/vehicle_status.h>
 #include "control_node/control_instance.h"
-#include <uORB/topics/leader_info.h>
+#include <uORB/topics/uav_info.h>
 #include <uORB/topics/follower_info.h>
 #include <uORB/topics/swarm_start_flag.h>
 #include <uORB/topics/leader_id.h>
@@ -118,7 +118,7 @@ private:
 	void handle_arm_auto_state();
 	void handle_arm_leader_state();
 	void handle_arm_offboard_state();
-	void handle_control_state(vehicle_status_s _state,leader_info_s _leader_info);
+	void handle_control_state(vehicle_status_s _state,uav_info_s _uav_info);
 	void handle_land_state();
 	void handle_disarm_state(vehicle_status_s _state);
 	void handle_idle_state(swarm_start_flag_s _start_flag);
@@ -143,7 +143,7 @@ private:
 	vehicle_local_position_s _vehicle_local_position;
 	sensor_gps_s _sensor_gps;
 
-	leader_info_s _leader_sp_glo_pos{};
+	uav_info_s _leader_sp_glo_pos{};
 	swarm_start_flag_s _swarm_start_flag{};
 	leader_id_s _leader_group_id{};
 
@@ -184,13 +184,13 @@ private:
 	uORB::Subscription                 _vehicle_status_sub{ORB_ID(vehicle_status)};          // regular subscription for additional data
 	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _sensor_gps_sub{ORB_ID(sensor_gps)};
-	uORB::Subscription _leader_info_sub{ORB_ID(leader_info)};
+	uORB::Subscription _uav_info_sub{ORB_ID(uav_info)};
 	uORB::Subscription _swarm_start_flag_sub{ORB_ID(swarm_start_flag)};
 
 	uORB::Publication<leader_id_s>   			_group_id_pub{ORB_ID(leader_id)};
 	uORB::Publication<swarm_start_flag_s>			_start_flag_pub{ORB_ID(swarm_start_flag)};
 
-	uORB::Publication<leader_info_s>			_leader_info_pub{ORB_ID(leader_info)};
+	uORB::Publication<uav_info_s>			_uav_info_pub{ORB_ID(uav_info)};
 
 	// Performance (perf) counters
 	perf_counter_t	_loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")};

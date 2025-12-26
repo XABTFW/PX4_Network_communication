@@ -111,13 +111,13 @@ bool Swarm_Node::swarm_node_init()
  */
 bool Swarm_Node::update_leader_info(int32_t selected_leader_id)
 {
-	if (!_leader_info_sub.updated()) {
+	if (!_uav_info_sub.updated()) {
 		// 没有新数据，检查现有数据是否有效
 		return PX4_ISFINITE(_leader_sp_glo_pos.lat) && PX4_ISFINITE(_leader_sp_glo_pos.lon);
 	}
 
-	leader_info_s temp_info{};
-	_leader_info_sub.copy(&temp_info);
+	uav_info_s temp_info{};
+	_uav_info_sub.copy(&temp_info);
 
 	if (selected_leader_id == 0) {
 		// 自动选择模式：接受第一个有效的主机
@@ -139,7 +139,7 @@ bool Swarm_Node::update_leader_info(int32_t selected_leader_id)
 		} else {
 			// 收到的不是目标主机的信息，清除旧数据
 			if (_leader_sp_glo_pos.mavid != 0 && _leader_sp_glo_pos.mavid != (uint32_t)selected_leader_id) {
-				_leader_sp_glo_pos = leader_info_s{};
+				_leader_sp_glo_pos = uav_info_s{};
 			}
 		}
 	}
@@ -727,7 +727,7 @@ void Swarm_Node::Run()
 	// 处理数据订阅
 	swarm_start_flag_s _start_flag{};
 	vehicle_status_s _state{};
-	leader_info_s _leader_info{};
+	uav_info_s _uav_info{};
 
 	_swarm_start_flag_sub.copy(&_start_flag);
 	_vehicle_status_sub.copy(&_state);
@@ -751,7 +751,7 @@ void Swarm_Node::Run()
 		break;
 
 	case state::CONTROL:
-		handle_control_state(_state, _leader_info);
+		handle_control_state(_state, _uav_info);
 		break;
 
 	case state::LAND:
@@ -874,7 +874,7 @@ void Swarm_Node::handle_arm_offboard_state()
 }
 
 // 处理 CONTROL 状态
-void Swarm_Node::handle_control_state(vehicle_status_s _state, leader_info_s _leader_info)
+void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_info)
 {
 	//  主机：只发布位置信息，不执行跟随逻辑
 	if (_set_as_leader) {
@@ -902,7 +902,7 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, leader_info_s _le
 		return;  // 主机提前返回，不执行后续的跟随控制逻辑
 	}
 
-	if (_leader_info.land == 1 ) {
+	if (_uav_info.land == 1 ) {
 		// 主机进入 MISSION 模式且准备降落，从机也应该进入降落
 
 		// 同步从机目标高度为主机当前高度
@@ -1004,7 +1004,7 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, leader_info_s _le
 	}
 
 	//  9. 主动触发 LAND
-	if (_swarm_start_flag.stop_swarm == 1 || _leader_info.land == 1) {
+	if (_swarm_start_flag.stop_swarm == 1 || _uav_info.land == 1) {
 		PX4_WARN("Swarm termination triggered, landing...");
 		STATE = state::LAND;
 		return;

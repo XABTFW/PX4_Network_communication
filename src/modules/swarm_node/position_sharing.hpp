@@ -4,7 +4,7 @@
 #include <stdint.h>
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
-#include <uORB/topics/leader_info.h>
+#include <uORB/topics/uav_info.h>
 #include <uORB/topics/follower_info.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/sensor_gps.h>
@@ -84,8 +84,8 @@ public:
 
 private:
 	// uORB发布和订阅
-	uORB::Publication<leader_info_s> _leader_info_pub{ORB_ID(leader_info)};
-	uORB::Subscription _leader_info_sub{ORB_ID(leader_info)};  // 订阅主机LEADER_INFO消息
+	uORB::Publication<uav_info_s> _uav_info_pub{ORB_ID(uav_info)};
+	uORB::Subscription _uav_info_sub{ORB_ID(uav_info)};  // 订阅主机UAV_INFO消息
 	uORB::Subscription _follower_info_sub{ORB_ID(follower_info)};  // 订阅从机FOLLOWER_INFO消息
 
 	// 其他飞机位置数组（索引对应vehicle_id）

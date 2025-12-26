@@ -138,25 +138,25 @@ void test_mavlink::run()
             test_mavlink_tx_pub.publish(_test_mavlink_tx);
 	}
 	//PX4_INFO("we test here!!!!!!!!!!!");
-	// PX4_INFO("TEST_MAVLINK _leader_info_sub.updated() is %d", _leader_info_sub.updated());
-    // _leader_info_sub.copy(&_leader_info);
-    // PX4_INFO("_leader_info.vz is %f",_leader_info.vz);
-    // PX4_INFO("_leader_info.yaw is %f",_leader_info.yaw);
-    // PX4_INFO("_leader_info.rel_alt is %f",_leader_info.alt);
+	// PX4_INFO("TEST_MAVLINK _uav_info_sub.updated() is %d", _uav_info_sub.updated());
+    // _uav_info_sub.copy(&_uav_info);
+    // PX4_INFO("_uav_info.vz is %f",_uav_info.vz);
+    // PX4_INFO("_uav_info.yaw is %f",_uav_info.yaw);
+    // PX4_INFO("_uav_info.rel_alt is %f",_uav_info.alt);
     //  static int iteration_count = 0;
     //             iteration_count++;
     // PX4_INFO("iteration_count is %d", iteration_count);
-	 
-     if(_leader_info_sub.updated())
+
+     if(_uav_info_sub.updated())
         {
 
-            _leader_info_sub.copy(&_leader_info);
-            aa.lat=_leader_info.lat;
-            aa.lon=_leader_info.lon;
-            aa.vx=_leader_info.vx;
-           // PX4_INFO("_leader_info.vz is %f",_leader_info.vz);
-	       // PX4_INFO("_leader_info.yaw is %f",_leader_info.yaw);
-	       // PX4_INFO("_leader_info.rel_alt is %f",_leader_info.alt);
+            _uav_info_sub.copy(&_uav_info);
+            aa.lat=_uav_info.lat;
+            aa.lon=_uav_info.lon;
+            aa.vx=_uav_info.vx;
+           // PX4_INFO("_uav_info.vz is %f",_uav_info.vz);
+	       // PX4_INFO("_uav_info.yaw is %f",_uav_info.yaw);
+	       // PX4_INFO("_uav_info.rel_alt is %f",_uav_info.alt);
 	}
 
       //  PX4_INFO("New line");

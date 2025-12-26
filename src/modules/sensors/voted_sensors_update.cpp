@@ -62,11 +62,10 @@ VotedSensorsUpdate::VotedSensorsUpdate(bool hil_enabled,
 		_accel.voter.set_timeout(500000);
 	}
 
-#if defined(CONFIG_ARCH_BOARD_PX4_SITL)
 	// SITL multi-vehicle simulation needs longer timeouts due to CPU load
-	_gyro.voter.set_timeout(500000);   // 500ms for simulation
-	_accel.voter.set_timeout(500000);
-#endif
+	// Increase default timeout from 40ms to 300ms for simulation
+	_gyro.voter.set_timeout(300000);
+	_accel.voter.set_timeout(300000);
 
 	initializeSensors();
 

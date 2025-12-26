@@ -9,7 +9,7 @@
 #include <uORB/topics/test_mavlink_tx.h>
 #include <uORB/topics/test_mavlink_rx.h>
 #include <perf/perf_counter.h>
-#include <uORB/topics/leader_info.h>
+#include <uORB/topics/uav_info.h>
 
 
 using namespace time_literals;
@@ -60,12 +60,12 @@ private:
     )
     test_mavlink_tx_s _test_mavlink_tx;
     test_mavlink_rx_s _test_mavlink_rx;
-    leader_info_s _leader_info;
-    leader_info_s aa;
+    uav_info_s _uav_info;
+    uav_info_s aa;
     // Subscriptions
     uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
     uORB::Subscription test_mavlink_rx_sub{ORB_ID(test_mavlink_rx)};
-    uORB::Subscription _leader_info_sub{ORB_ID(leader_info)};
+    uORB::Subscription _uav_info_sub{ORB_ID(uav_info)};
 
     uORB::Publication<test_mavlink_tx_s>	test_mavlink_tx_pub{ORB_ID(test_mavlink_tx)};
 };

@@ -13,7 +13,7 @@ void PositionSharing::publish_position(uint8_t mavid,
                                        const sensor_gps_s &sensor_gps,
                                        bool at_target)
 {
-	leader_info_s pos{};
+	uav_info_s pos{};
 	pos.timestamp = hrt_absolute_time();
 	pos.mavid = mavid;
 	pos.lat = sensor_gps.latitude_deg;
@@ -27,18 +27,18 @@ void PositionSharing::publish_position(uint8_t mavid,
 	pos.land = 0;
 	pos.at_target = at_target ? 1 : 0;  // 传递是否已到达目标位置
 
-	_leader_info_pub.publish(pos);
+	_uav_info_pub.publish(pos);
 }
 
 void PositionSharing::update_other_positions(uint8_t current_vehicle_id,
                                              MapProjection &global_local_proj,
                                              int32_t leader_id)
 {
-	leader_info_s leader_pos{};
+	uav_info_s leader_pos{};
 	follower_info_s follower_pos{};
 
-	// 读取 LEADER_INFO 消息（主机位置）
-	while (_leader_info_sub.update(&leader_pos)) {
+	// 读取 UAV_INFO 消息（主机位置）
+	while (_uav_info_sub.update(&leader_pos)) {
 		if (leader_pos.mavid == current_vehicle_id || leader_pos.mavid == 0 ||
 		    leader_pos.mavid >= MAX_SWARM_SIZE) {
 			continue;
