@@ -27,6 +27,9 @@
 #include "position_sharing.hpp"
 #include "velocity_obstacle_controller.hpp"
 #include "formation_planner.hpp"
+#include "role_manager.hpp"
+#include "avoidance_filter.hpp"
+#include "group_coordinator.hpp"
 #include <lib/geo/geo.h>
 
 #define M_PI_PRECISE	3.141592653589793238462643383279502884
@@ -176,6 +179,16 @@ private:
 
 	//  编队路径规划器
 	FormationPlanner _formation_planner;
+
+	// 多组编队管理模块
+	RoleManager _role_manager;              // 角色管理器
+	AvoidanceFilter _avoidance_filter;      // 避撞过滤器
+	GroupCoordinator _group_coordinator;    // 组间协调器
+
+	// 过滤后的避撞目标列表
+	OtherVehiclePosition _filtered_avoidance_targets[MAX_SWARM_SIZE];
+	int _filtered_target_count{0};
+
 	// Subscriptions
 
 

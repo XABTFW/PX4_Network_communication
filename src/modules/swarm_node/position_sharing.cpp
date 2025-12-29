@@ -11,11 +11,15 @@ PositionSharing::PositionSharing()
 void PositionSharing::publish_position(uint8_t mavid,
                                        const vehicle_local_position_s &vehicle_local_position,
                                        const sensor_gps_s &sensor_gps,
+                                       uint8_t group_id,
+                                       bool is_leader,
                                        bool at_target)
 {
 	uav_info_s pos{};
 	pos.timestamp = hrt_absolute_time();
 	pos.mavid = mavid;
+	pos.group_id = group_id;
+	pos.is_leader = is_leader;
 	pos.lat = sensor_gps.latitude_deg;
 	pos.lon = sensor_gps.longitude_deg;
 	pos.alt = sensor_gps.altitude_msl_m;
@@ -52,9 +56,11 @@ void PositionSharing::update_other_positions(uint8_t current_vehicle_id,
 		float local_x, local_y;
 		global_local_proj.project(leader_pos.lat, leader_pos.lon, local_x, local_y);
 
+		// 使用消息中的 is_leader 字段，而不是硬编码
 		update_vehicle_position(leader_pos.mavid, local_x, local_y, leader_pos.alt,
 		                       leader_pos.vx, leader_pos.vy, leader_pos.vz,
-		                       leader_pos.yaw, leader_pos.timestamp, true,
+		                       leader_pos.yaw, leader_pos.timestamp,
+		                       leader_pos.group_id, leader_pos.is_leader,
 		                       leader_pos.at_target == 1);
 	}
 
@@ -78,12 +84,15 @@ void PositionSharing::update_other_positions(uint8_t current_vehicle_id,
 			continue;
 		}
 
+		// follower_info 消息暂时没有 group_id 和 is_leader，使用默认值
+		// 从机的 is_leader 为 false
 		bool is_leader = (leader_id > 0) ? (follower_pos.mavid == (uint32_t)leader_id)
 		                                 : (follower_pos.mavid == 2);
 
 		update_vehicle_position(follower_pos.mavid, local_x, local_y, follower_pos.alt,
 		                       follower_pos.vx, follower_pos.vy, follower_pos.vz,
-		                       follower_pos.yaw, follower_pos.timestamp, is_leader,
+		                       follower_pos.yaw, follower_pos.timestamp,
+		                       0, is_leader,  // group_id 暂时为0
 		                       follower_pos.at_target == 1);
 	}
 }
@@ -104,7 +113,8 @@ int PositionSharing::get_valid_vehicle_count() const
 
 void PositionSharing::update_vehicle_position(uint8_t mavid, float x, float y, float z,
                                               float vx, float vy, float vz, float yaw,
-                                              uint64_t timestamp, bool is_leader, bool at_target)
+                                              uint64_t timestamp, uint8_t group_id,
+                                              bool is_leader, bool at_target)
 {
 	if (mavid >= MAX_SWARM_SIZE) {
 		return;
@@ -112,6 +122,7 @@ void PositionSharing::update_vehicle_position(uint8_t mavid, float x, float y, f
 
 	OtherVehiclePosition& v = _other_vehicles[mavid];
 	v.mavid = mavid;
+	v.group_id = group_id;
 	v.x = x;
 	v.y = y;
 	v.z = z;

@@ -3587,29 +3587,20 @@ MavlinkReceiver::handle_message_uav_info(mavlink_message_t *msg)
 		mavlink_uav_info_t  _uav_info_msg{};
 		mavlink_msg_uav_info_decode(msg, &_uav_info_msg);
 
-		// 读取SWARM_LEADER_ID参数来判断哪个是主机
-		int32_t selected_leader_id = 0;
-		param_t param_leader_id = param_find("SWARM_LEADER_ID");
-		if (param_leader_id != PARAM_INVALID) {
-			param_get(param_leader_id, &selected_leader_id);
-		}
-
 		// ★★★ 检查是否是主机的真实位置消息（mavid >= 100 表示避撞用的真实位置）★★★
 		bool is_leader_real_pos = (_uav_info_msg.mavid >= 100);
 		uint32_t actual_mavid = is_leader_real_pos ? (_uav_info_msg.mavid - 100) : _uav_info_msg.mavid;
 
-		// 判断是否是主机
-		bool is_leader = false;
-		if (selected_leader_id > 0) {
-			is_leader = (actual_mavid == (uint32_t)selected_leader_id);
-		} else {
-			is_leader = (actual_mavid == 2);
-		}
+		// ★★★ 直接使用消息中的 is_leader 字段，不再通过参数判断 ★★★
+		bool is_leader = (_uav_info_msg.is_leader == 1);
+		uint32_t group_id = _uav_info_msg.group_id;
 
 		if (is_leader && !is_leader_real_pos) {
 			// 主机的目标位置消息 → 发布到 uav_info（用于从机跟随）
 			_uav_info.timestamp = hrt_absolute_time();
 			_uav_info.mavid = actual_mavid;
+			_uav_info.group_id = group_id;
+			_uav_info.is_leader = true;
 			_uav_info.lat = _uav_info_msg.lat;
 			_uav_info.lon = _uav_info_msg.lon;
 			_uav_info.alt = _uav_info_msg.rel_alt;
@@ -3624,7 +3615,7 @@ MavlinkReceiver::handle_message_uav_info(mavlink_message_t *msg)
 		} else if (is_leader && is_leader_real_pos) {
 			// ★★★ 主机的真实位置消息 → 发布到 follower_info（用于避撞）★★★
 			_follower_info.timestamp = hrt_absolute_time();
-			_follower_info.mavid = actual_mavid;  // 使用真实的 mavid
+			_follower_info.mavid = actual_mavid;
 			_follower_info.lat = _uav_info_msg.lat;
 			_follower_info.lon = _uav_info_msg.lon;
 			_follower_info.alt = _uav_info_msg.rel_alt;
@@ -3634,8 +3625,8 @@ MavlinkReceiver::handle_message_uav_info(mavlink_message_t *msg)
 			_follower_info.yaw = _uav_info_msg.yaw;
 			_follower_info.yawspeed = _uav_info_msg.yaw_speed;
 			// 从land字段解析: Bit 0 = landing, Bit 1 = at_target
-			_follower_info.land = _uav_info_msg.land & 0x01;  // 只取Bit 0
-			_follower_info.at_target = (_uav_info_msg.land & 0x02) ? 1 : 0;  // 取Bit 1
+			_follower_info.land = _uav_info_msg.land & 0x01;
+			_follower_info.at_target = (_uav_info_msg.land & 0x02) ? 1 : 0;
 			_follower_info_pub.publish(_follower_info);
 
 		} else {
@@ -3651,8 +3642,8 @@ MavlinkReceiver::handle_message_uav_info(mavlink_message_t *msg)
 			_follower_info.yaw = _uav_info_msg.yaw;
 			_follower_info.yawspeed = _uav_info_msg.yaw_speed;
 			// 从land字段解析: Bit 0 = landing, Bit 1 = at_target
-			_follower_info.land = _uav_info_msg.land & 0x01;  // 只取Bit 0
-			_follower_info.at_target = (_uav_info_msg.land & 0x02) ? 1 : 0;  // 取Bit 1
+			_follower_info.land = _uav_info_msg.land & 0x01;
+			_follower_info.at_target = (_uav_info_msg.land & 0x02) ? 1 : 0;
 			_follower_info_pub.publish(_follower_info);
 		}
 }

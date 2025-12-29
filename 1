@@ -1,0 +1,28 @@
+地面站端信号分析
+地面站发送的参数
+| 参数 | 发送函数 | 说明 | |------|----------|------| | SWARM_SET_LEADER | set_main_airplane() | 设置主机标识 (1=主机, 0=从机) | | SWARM_GROUP_ID | store_airplane_group() | 设置组号 | | SWARM_X/Y/Z_OFFSET | caculate_pos() | 设置编队偏移量 |
+
+⚠️ 发现的问题
+地面站没有发送 SWARM_LEADER_ID 参数！
+
+地面站的 set_main_airplane() 函数只发送了：
+
+SWARM_SET_LEADER = 1 给主机
+SWARM_SET_LEADER = 0 给同组其他飞机
+但没有告诉从机应该跟随哪个主机的 ID。
+
+当前飞控端的跟随逻辑
+飞控端现在使用 GroupCoordinator 通过 group_id 和 is_leader 字段来匹配同组主机，这个逻辑是正确的，不依赖 SWARM_LEADER_ID。
+
+信号匹配检查
+| 功能 | 地面站发送 | 飞控端接收 | 状态 | |------|------------|------------|------| | 设置主机 | SWARM_SET_LEADER | ✅ _param_swarm_set_leader | 匹配 | | 设置组号 | SWARM_GROUP_ID | ✅ _param_swarm_group_id | 匹配 | | 设置偏移 | SWARM_X/Y/Z_OFFSET | ✅ _param_swarm_X/Y/Z_offset | 匹配 | | 主机位置 | uav_info 消息 | ✅ _uav_info_sub | 匹配 | | 组号传递 | uav_info.group_id | ✅ 新增字段 | 需验证 | | 主机标识 | uav_info.is_leader | ✅ 新增字段 | 需验证 |
+
+关键问题
+新增的 group_id 和 is_leader 字段是在 uav_info 消息中添加的，但这个消息是飞控之间通过 MAVLink 广播的，不是地面站发送的。
+
+所以流程是：
+
+地面站设置参数 SWARM_SET_LEADER 和 SWARM_GROUP_ID
+飞控读取参数，在 publish_position() 时带上这些信息
+其他飞控收到后，通过 GroupCoordinator 匹配同组主机
+这个逻辑是正确的，信号处理没有问题！

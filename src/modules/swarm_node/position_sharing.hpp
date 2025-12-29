@@ -13,6 +13,7 @@
 // 定义其他飞机位置结构体
 struct OtherVehiclePosition {
     uint8_t mavid;
+    uint8_t group_id{0};               // 所属组号（用于多组编队）
     float x, y, z;
     float vx, vy, vz;
     float yaw;
@@ -40,11 +41,15 @@ public:
 	 * @param mavid 飞机ID
 	 * @param vehicle_local_position 本地位置信息
 	 * @param sensor_gps GPS信息
+	 * @param group_id 组号
+	 * @param is_leader 是否为主机
 	 * @param at_target 是否已到达目标位置（用于避撞优先级）
 	 */
     void publish_position(uint8_t mavid,
                           const vehicle_local_position_s &vehicle_local_position,
                           const sensor_gps_s &sensor_gps,
+                          uint8_t group_id,
+                          bool is_leader,
                           bool at_target = false);
 
 	/**
@@ -74,12 +79,14 @@ public:
 	 * @param vx, vy, vz 速度
 	 * @param yaw 航向
 	 * @param timestamp 时间戳
+	 * @param group_id 组号
 	 * @param is_leader 是否为主机
 	 * @param at_target 是否已到达目标位置
 	 */
 	void update_vehicle_position(uint8_t mavid, float x, float y, float z,
 	                             float vx, float vy, float vz, float yaw,
-	                             uint64_t timestamp, bool is_leader = false, bool at_target = false);
+	                             uint64_t timestamp, uint8_t group_id = 0,
+	                             bool is_leader = false, bool at_target = false);
 
 
 private:

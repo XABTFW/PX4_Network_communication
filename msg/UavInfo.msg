@@ -1,6 +1,8 @@
 uint64 timestamp  # time since system start (microseconds)
 
 uint32 mavid      #mavid
+uint32 group_id   # swarm group id (for multi-group formation)
+bool is_leader    # true if this aircraft is a leader in its group
 float64 lat       # uav position (deg * 1e7)
 float64 lon       # uav position (deg * 1e7)
 float64 alt       # uav altitude (m)

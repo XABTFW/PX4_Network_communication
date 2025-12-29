@@ -75,10 +75,17 @@ private:
 	{
 		// 每次都检查是否为主机，支持 QGC 动态切换主机
 		int32_t swarm_set_leader = 0;
-		param_t param_id = param_find("SWARM_SET_LEADER");
-		if (param_id != PARAM_INVALID) {
-			param_get(param_id, &swarm_set_leader);
+		param_t param_leader = param_find("SWARM_SET_LEADER");
+		if (param_leader != PARAM_INVALID) {
+			param_get(param_leader, &swarm_set_leader);
 			_is_leader = (swarm_set_leader == 1);
+		}
+
+		// 获取组号
+		int32_t group_id = 1;
+		param_t param_group = param_find("SWARM_GROUP_ID");
+		if (param_group != PARAM_INVALID) {
+			param_get(param_group, &group_id);
 		}
 
 		// 始终发送位置信息，不依赖于位置是否更新
@@ -161,6 +168,8 @@ private:
 
 		// 获取系统 ID
 		msg.mavid = _mavlink->get_system_id();
+		msg.group_id = group_id;
+		msg.is_leader = _is_leader ? 1 : 0;
 
 		// 发送第一条消息（主机发送目标位置用于跟随，从机发送真实位置）
 		mavlink_msg_uav_info_send_struct(_mavlink->get_channel(), &msg);
@@ -179,6 +188,8 @@ private:
 			msg_real.yaw = local_pos.heading;
 			msg_real.yaw_speed = local_pos.delta_heading;
 			msg_real.land = msg.land;
+			msg_real.group_id = group_id;
+			msg_real.is_leader = 1;
 			// 使用特殊标记：mavid + 100，表示这是主机的真实位置（用于避撞）
 			msg_real.mavid = _mavlink->get_system_id() + 100;
 

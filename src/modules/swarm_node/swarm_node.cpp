@@ -84,6 +84,13 @@ bool Swarm_Node::swarm_node_init()
 	set_swarm_info(_param_swarm_set_leader.get(), _param_swarm_group_id.get());
 	set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 
+	// 初始化多组编队管理模块
+	_role_manager.update(_set_as_leader, _group_id, 1);  // 头号主机组号默认为1
+	_group_coordinator.set_self_info(vehicle_id, _group_id, _set_as_leader);
+
+	PX4_INFO("[初始化] 飞机%d: 组号=%d, 角色=%s",
+		 vehicle_id, _group_id, _role_manager.get_role_name());
+
 	bool swarm_active = (_swarm_start_flag.start_swarm || _swarm_start_flag.start_swarm_auto);
 
 	if ((_vehicle_local_position.xy_valid) && swarm_active) {
@@ -106,41 +113,46 @@ bool Swarm_Node::swarm_node_init()
 
 /**
  * @brief 更新主机信息
- * @param selected_leader_id 选定的主机ID（0表示自动选择）
+ * @param selected_leader_id 选定的主机ID（0表示自动选择同组主机）
  * @return true: 主机信息有效，可以继续跟随; false: 主机信息无效
  */
 bool Swarm_Node::update_leader_info(int32_t selected_leader_id)
 {
 	if (!_uav_info_sub.updated()) {
 		// 没有新数据，检查现有数据是否有效
-		return PX4_ISFINITE(_leader_sp_glo_pos.lat) && PX4_ISFINITE(_leader_sp_glo_pos.lon);
+		return _group_coordinator.has_valid_leader() ||
+		       (PX4_ISFINITE(_leader_sp_glo_pos.lat) && PX4_ISFINITE(_leader_sp_glo_pos.lon));
 	}
 
 	uav_info_s temp_info{};
 	_uav_info_sub.copy(&temp_info);
 
-	if (selected_leader_id == 0) {
-		// 自动选择模式：接受第一个有效的主机
-		if (!PX4_ISFINITE(_leader_sp_glo_pos.lat) || _leader_sp_glo_pos.mavid == 0) {
-			_leader_sp_glo_pos = temp_info;
+	// 跳过自己的消息
+	if (temp_info.mavid == (uint32_t)vehicle_id) {
+		return _group_coordinator.has_valid_leader() ||
+		       (PX4_ISFINITE(_leader_sp_glo_pos.lat) && PX4_ISFINITE(_leader_sp_glo_pos.lon));
+	}
+
+	// 使用组间协调器匹配同组主机（消息中已包含 group_id 和 is_leader）
+	if (_group_coordinator.try_update_leader(temp_info)) {
+		// 找到同组主机，更新跟随目标
+		const uav_info_s& leader = _group_coordinator.get_leader_info();
+
+		// 检测主机切换
+		if (_leader_sp_glo_pos.mavid != 0 && _leader_sp_glo_pos.mavid != leader.mavid) {
+			PX4_INFO("[组内主机切换] 从机%d(组%d): 从主机ID=%d切换到主机ID=%d",
+				 vehicle_id, _group_id, _leader_sp_glo_pos.mavid, leader.mavid);
 		}
 
-	} else {
-		// 指定主机模式
+		_leader_sp_glo_pos = leader;
+		return true;
+	}
+
+	// 如果组间协调器没有匹配到，使用原有逻辑作为后备
+	if (selected_leader_id > 0) {
 		if (temp_info.mavid == (uint32_t)selected_leader_id) {
-			// 检测主机切换
-			if (_leader_sp_glo_pos.mavid != 0 && _leader_sp_glo_pos.mavid != (uint32_t)selected_leader_id) {
-				PX4_WARN("[主机切换] 从机%d: 从主机ID=%d切换到主机ID=%d",
-					 vehicle_id, _leader_sp_glo_pos.mavid, selected_leader_id);
-			}
-
 			_leader_sp_glo_pos = temp_info;
-
-		} else {
-			// 收到的不是目标主机的信息，清除旧数据
-			if (_leader_sp_glo_pos.mavid != 0 && _leader_sp_glo_pos.mavid != (uint32_t)selected_leader_id) {
-				_leader_sp_glo_pos = uav_info_s{};
-			}
+			return true;
 		}
 	}
 
@@ -384,10 +396,26 @@ Swarm_Node::CollisionAvoidanceResult Swarm_Node::perform_collision_avoidance(
 {
 	CollisionAvoidanceResult result;
 
+	// 根据角色判断是否需要避撞
+	SwarmRole role = _role_manager.get_role();
+	if (!_avoidance_filter.should_perform_avoidance(role)) {
+		// 头号主机不需要避撞
+		return result;
+	}
+
 	// 只有在需要避撞时才启用避撞检查
 	bool enable_avoidance_check = _param_apf_enable.get() > 0.5f && !in_takeoff_phase && need_avoidance;
 
 	if (!enable_avoidance_check) {
+		return result;
+	}
+
+	// 根据角色过滤避撞目标
+	_filtered_target_count = _avoidance_filter.filter_targets(
+		role, other_aircraft, MAX_SWARM_SIZE, vehicle_id, _filtered_avoidance_targets);
+
+	// 如果没有需要避撞的目标，直接返回
+	if (_filtered_target_count == 0) {
 		return result;
 	}
 
@@ -405,19 +433,19 @@ Swarm_Node::CollisionAvoidanceResult Swarm_Node::perform_collision_avoidance(
 	dt = math::constrain(dt, 0.01f, 0.2f);
 	last_time = current_time;
 
-	// 使用速度障碍方法计算安全目标速度和位置修正
+	// 使用速度障碍方法计算安全目标速度和位置修正（使用过滤后的目标列表）
 	VelocityObstacleController::AvoidanceResult vo_result =
 		_vo_controller.calculate_safe_velocity(
 			current_position, current_vel, desired_vel,
-			other_aircraft, MAX_SWARM_SIZE, vehicle_id, dt
+			_filtered_avoidance_targets, _filtered_target_count, vehicle_id, dt
 		);
 
 	result.position_correction = vo_result.position_correction;
 	result.collision_risk = (vo_result.avoided_aircraft_count > 0);
 	result.critical_collision_risk = vo_result.emergency_avoidance;
 
-	// 预测性轨迹碰撞检测
-	predict_trajectory_collision(current_position, current_speed_xy, other_aircraft, result);
+	// 预测性轨迹碰撞检测（也使用过滤后的目标列表）
+	predict_trajectory_collision(current_position, current_speed_xy, _filtered_avoidance_targets, result);
 
 	return result;
 }
@@ -638,8 +666,9 @@ void Swarm_Node::start_swarm_node()
 					       _vehicle_local_position.vy * _vehicle_local_position.vy);
 		bool at_target_position = (distance_to_target < _param_at_target_distance.get()) && (current_speed_xy < _param_at_target_speed.get());
 
-		// 发布位置信息，包含at_target状态
-		_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps, at_target_position);
+		// 发布位置信息，包含at_target状态、组号和主机标识
+		_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps,
+						   _group_id, _set_as_leader, at_target_position);
 
 		// 判断是否需要避撞：编队切换或距离目标较远（正在移动中）
 		bool need_avoidance = formation_switching || (distance_to_target > _param_need_avoidance_distance.get());
@@ -790,6 +819,19 @@ void Swarm_Node::handle_parameter_update()
 		// 这样当QGC动态改变主机选择时，follower能够及时响应
 		set_swarm_info(_param_swarm_set_leader.get(), _param_swarm_group_id.get());
 
+		// 更新角色管理器（头号主机组号默认为1）
+		_role_manager.update(_set_as_leader, _group_id, 1);
+
+		// 更新组间协调器
+		_group_coordinator.set_self_info(vehicle_id, _group_id, _set_as_leader);
+
+		// 检测角色变化并输出日志
+		if (_role_manager.role_changed()) {
+			PX4_INFO("[角色变更] 飞机%d: 变更为 %s (组%d)",
+				 vehicle_id, _role_manager.get_role_name(), _group_id);
+			_role_manager.clear_role_changed();
+		}
+
 		//  关键修复：如果主机角色发生变化（从机变主机或主机变从机），需要重新初始化状态机
 		if (old_set_as_leader != _set_as_leader) {
 			PX4_WARN("[主机切换] 飞机%d: 角色从%s切换为%s，重新初始化状态机",
@@ -804,6 +846,9 @@ void Swarm_Node::handle_parameter_update()
 			// 重新设置偏移量
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 			_offset_initialized = false;
+
+			// 清除组协调器中的主机信息
+			_group_coordinator.clear_leader();
 		} else {
 			// 角色未变化，只重新设置偏移量
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
@@ -814,8 +859,9 @@ void Swarm_Node::handle_parameter_update()
 		static uint64_t last_param_log = 0;
 		uint64_t now = hrt_absolute_time();
 		if (now - last_param_log > 2000000) {  // 每2秒最多输出一次
-			PX4_INFO("[参数更新] 飞机%d: SWARM_SET_LEADER=%d, SWARM_GROUP_ID=%d, SWARM_LEADER_ID=%d",
-				 vehicle_id, _param_swarm_set_leader.get(), _param_swarm_group_id.get(), _param_swarm_leader_id.get());
+			PX4_INFO("[参数更新] 飞机%d: SWARM_SET_LEADER=%d, SWARM_GROUP_ID=%d, SWARM_LEADER_ID=%d, 角色=%s",
+				 vehicle_id, _param_swarm_set_leader.get(), _param_swarm_group_id.get(),
+				 _param_swarm_leader_id.get(), _role_manager.get_role_name());
 			last_param_log = now;
 		}
 	}
@@ -876,7 +922,7 @@ void Swarm_Node::handle_arm_offboard_state()
 // 处理 CONTROL 状态
 void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_info)
 {
-	//  主机：只发布位置信息，不执行跟随逻辑
+	//  主机处理逻辑
 	if (_set_as_leader) {
 		// 主机：发布自己的位置信息，让从机能够接收到
 		vehicle_local_position_s vehicle_local_pos{};
@@ -884,21 +930,51 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 
 		if (_vehicle_local_position_sub.copy(&vehicle_local_pos) && _sensor_gps_sub.copy(&sensor_gps)) {
 			// 主机始终设置at_target=false，因为主机不需要避让其他飞机
-			_position_sharing.publish_position(vehicle_id, vehicle_local_pos, sensor_gps, false);
+			_position_sharing.publish_position(vehicle_id, vehicle_local_pos, sensor_gps,
+							   _group_id, true, false);
 
 			// 调试输出（每2秒一次）
 			static uint64_t last_leader_publish_log = 0;
 			uint64_t now = hrt_absolute_time();
 			if (now - last_leader_publish_log > 2000000) {
-				PX4_INFO("[主机发布] 主机%d: 发布位置信息 GPS(%.6f, %.6f) 给从机",
-					 vehicle_id, (double)sensor_gps.latitude_deg, (double)sensor_gps.longitude_deg);
+				PX4_INFO("[%s] 飞机%d(组%d): 发布位置信息 GPS(%.6f, %.6f)",
+					 _role_manager.get_role_name(), vehicle_id, _group_id,
+					 (double)sensor_gps.latitude_deg, (double)sensor_gps.longitude_deg);
 				last_leader_publish_log = now;
 			}
 		}
 
-		//  关键：主机只需要发布位置信息，不需要执行跟随逻辑
+		// 次要主机：执行任务的同时进行主机间避撞
+		if (_role_manager.is_secondary_leader()) {
+			// 更新其他飞机位置信息
+			_position_sharing.update_other_positions(vehicle_id, _global_local_proj_ref, 0);
+			const OtherVehiclePosition* other_aircraft = _position_sharing.get_other_vehicles();
+
+			// 获取当前位置和速度
+			matrix::Vector3f current_position(vehicle_local_pos.x, vehicle_local_pos.y, vehicle_local_pos.z);
+			float current_speed_xy = sqrtf(vehicle_local_pos.vx * vehicle_local_pos.vx +
+						       vehicle_local_pos.vy * vehicle_local_pos.vy);
+
+			// 执行避撞检测（AvoidanceFilter 会自动过滤，只对其他主机避撞）
+			CollisionAvoidanceResult avoidance_result = perform_collision_avoidance(
+				current_position, current_speed_xy, true, false, other_aircraft);
+
+			// 如果检测到碰撞风险，输出警告
+			if (avoidance_result.collision_risk) {
+				static uint64_t last_avoidance_log = 0;
+				uint64_t now_avoid = hrt_absolute_time();
+				if (now_avoid - last_avoidance_log > 1000000) {
+					PX4_WARN("[次要主机避撞] 飞机%d(组%d): 检测到与其他主机的碰撞风险",
+						 vehicle_id, _group_id);
+					last_avoidance_log = now_avoid;
+				}
+				// TODO: 这里可以添加次要主机的避撞修正逻辑
+				// 例如：临时调整航点或速度
+			}
+		}
+
+		//  头号主机：只发布位置信息，不需要避撞
 		// 主机的控制完全由PX4的任务系统（AUTO模式）或用户手动控制
-		// 不调用start_swarm_node()，避免干扰主机控制
 		return;  // 主机提前返回，不执行后续的跟随控制逻辑
 	}
 
@@ -956,7 +1032,8 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 			// 继续发布位置信息，供其他飞机避撞使用
 			_vehicle_local_position_sub.copy(&_vehicle_local_position);
 			_sensor_gps_sub.copy(&_sensor_gps);
-			_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps, true);
+			_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps,
+							   _group_id, _set_as_leader, true);
 
 			// 持续发送OFFBOARD心跳信号，保持切回OFFBOARD的能力
 			// 发送当前位置作为目标，不会影响AUTO模式的任务执行

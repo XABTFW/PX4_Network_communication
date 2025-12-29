@@ -629,7 +629,7 @@ PARAM_DEFINE_INT32(NAV_RCL_ACT, 2);
  * @bit 3 External Mode
  * @group Commander
  */
-PARAM_DEFINE_INT32(COM_RCL_EXCEPT, 0);
+PARAM_DEFINE_INT32(COM_RCL_EXCEPT, 7);
 
 /**
  * Datalink loss exceptions
