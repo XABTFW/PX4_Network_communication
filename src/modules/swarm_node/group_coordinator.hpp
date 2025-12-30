@@ -5,6 +5,7 @@
  * 功能：
  * - 从机查找并跟随同组主机
  * - 验证主机信息是否属于同组
+ * - 处理同组多主机情况（选择ID最小的）
  */
 
 #pragma once
@@ -69,6 +70,13 @@ public:
      * @brief 获取当前跟随的主机ID
      */
     int get_leader_id() const { return _has_valid_leader ? _leader_info.mavid : 0; }
+
+    /**
+     * @brief 检查是否检测到同组有其他主机（用于多主机冲突检测）
+     * @param uav_info 收到的飞机信息
+     * @return true: 检测到同组其他主机
+     */
+    bool detect_other_leader_in_group(const uav_info_s &uav_info) const;
 
 private:
     int _vehicle_id{0};

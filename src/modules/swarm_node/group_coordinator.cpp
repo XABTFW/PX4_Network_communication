@@ -23,6 +23,15 @@ bool GroupCoordinator::is_my_group_leader(const uav_info_s &uav_info) const
            (uav_info.mavid != static_cast<uint32_t>(_vehicle_id));
 }
 
+bool GroupCoordinator::detect_other_leader_in_group(const uav_info_s &uav_info) const
+{
+    // 检测同组是否有其他主机（用于多主机冲突检测）
+    // 条件：组号相同、是主机、不是自己
+    return (uav_info.group_id == static_cast<uint32_t>(_group_id)) &&
+           (uav_info.is_leader) &&
+           (uav_info.mavid != static_cast<uint32_t>(_vehicle_id));
+}
+
 bool GroupCoordinator::try_update_leader(const uav_info_s &uav_info)
 {
     // 检查是否为同组主机
@@ -35,14 +44,23 @@ bool GroupCoordinator::try_update_leader(const uav_info_s &uav_info)
         return false;
     }
 
-    // 检测主机切换
-    if (_has_valid_leader && _leader_info.mavid != uav_info.mavid) {
-        // 主机ID发生变化，可能是组内主机切换
-        // 这里可以添加日志或其他处理
+    // 多主机处理：如果已有主机，选择ID最小的
+    if (_has_valid_leader) {
+        if (uav_info.mavid < _leader_info.mavid) {
+            // 新主机ID更小，切换到新主机
+            _leader_info = uav_info;
+        } else if (uav_info.mavid == _leader_info.mavid) {
+            // 同一个主机，更新信息
+            _leader_info = uav_info;
+        }
+        // 如果新主机ID更大，忽略（保持跟随ID更小的主机）
+    } else {
+        // 首次找到主机
+        _leader_info = uav_info;
+        _has_valid_leader = true;
+
     }
 
-    _leader_info = uav_info;
-    _has_valid_leader = true;
     return true;
 }
 

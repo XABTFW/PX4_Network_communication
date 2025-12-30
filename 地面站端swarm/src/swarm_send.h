@@ -23,7 +23,7 @@ public:
     explicit Swarm_send(QObject *parent = nullptr);
     Q_INVOKABLE void caculate_pos(int sysid,float x,float y,float z);
     Q_INVOKABLE void set_main_airplane(int sysid, int grp_id, float x,float y,float z);
-    Q_INVOKABLE void store_airplane_group(int sysid, int group_id, bool flag = false);
+    Q_INVOKABLE void store_airplane_group(int sysid, int group_id, bool flag = false, bool set_as_follower = false);
 
   //  Vehicle*      _vehicle;
 signals:

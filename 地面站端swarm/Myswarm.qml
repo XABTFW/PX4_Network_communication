@@ -53,13 +53,13 @@ Window {
     property color modelColor2: "#30677A"  // 模型颜色
     property color modelColor3: "#EA8C89"  // 模型颜色
     property color modelColor4: "#3be292"  // 模型颜色
-    
+
     // 各组连接的模型数量
     property int group1Count: 0
     property int group2Count: 0
     property int group3Count: 0
     property int group4Count: 0
-    
+
     // 更新各组数量
     function updateGroupCounts() {
         var c1 = 0, c2 = 0, c3 = 0, c4 = 0;
@@ -4222,11 +4222,11 @@ Window {
                                    zOffset = map_from.z
 
                                    if_release = true
-                                   
+
                                    // 先更新位置信息，再更新相对坐标显示
                                    show_position(pickNode)
                                    updateRelativePosition(pickNode)
-                                   
+
                                    // 多选操作
                                    if (ifpick) {
                                        select_merge.push(pickNode)
@@ -4241,7 +4241,7 @@ Window {
                              //      pick_name.text = "None"
                               //     pick_distance.text = " "
                              //      pick_word.text = " "
-                                   
+
                                    // 清空相对坐标显示
                                    updateRelativePosition(null)
 
@@ -4777,24 +4777,32 @@ Window {
                                             canv2.requestPaint()
                                             canv3.requestPaint()
                                             canv4.requestPaint()
+
+                                            // 初始化边界索引
+                                            var bound1 = Math.floor(plan_arr.length / 4);
+                                            var bound2 = Math.floor(plan_arr.length / 2);
+                                            var bound3 = Math.floor(plan_arr.length * 3 / 4);
+
                                             for (var l = 0; l < plan_arr.length; l++) {
-                                                if (l < plan_arr.length / 4) {
+                                                if (l < bound1) {
                                                     plan_arr[l].group_id = 1
-                                                    i = l
-                                                } else if (l >= plan_arr.length / 4 && l < plan_arr.length / 2) {
+                                                } else if (l < bound2) {
                                                     plan_arr[l].group_id = 2
-                                                    j = l
-                                                } else if (l >= plan_arr.length / 2 && l < plan_arr.length * 3 / 4) {
+                                                } else if (l < bound3) {
                                                     plan_arr[l].group_id = 3
-                                                    k = l
                                                 } else {
                                                     plan_arr[l].group_id = 4
                                                 }
-                                                if(plan_arr[l].is_connected)swarm_send.store_airplane_group(plan_arr[l], plan_arr[l].group_id, true)
+                                                if(plan_arr[l].is_connected)swarm_send.store_airplane_group(plan_arr[l].objectName, plan_arr[l].group_id, true)
                                             }
                                             main_node_name.length = 4
+                                            main_node_name[0] = ""
+                                            main_node_name[1] = ""
+                                            main_node_name[2] = ""
+                                            main_node_name[3] = ""
 
-                                            for (var mn4_1 = 0; mn4_1 < plan_arr.length  / 4; mn4_1++) {
+                                            // 为每组设置主机
+                                            for (var mn4_1 = 0; mn4_1 < bound1 && mn4_1 < plan_arr.length; mn4_1++) {
                                                 if (if_main_node(plan_arr[mn4_1].objectName)) {
                                                     main_node_name[0] = plan_arr[mn4_1].objectName
                                                     set_main_name(plan_arr[mn4_1])
@@ -4806,11 +4814,11 @@ Window {
                                                 if(plan_arr[mn4_1].is_connected === true)set_main_color(plan_arr[mn4_1].objectName)
                                             }
 
-                                            for (var mn4_2 = i + 1; mn4_2 >= plan_arr.length / 4 && mn4_2 < plan_arr.length / 2; mn4_2++) {
+                                            for (var mn4_2 = bound1; mn4_2 < bound2 && mn4_2 < plan_arr.length; mn4_2++) {
                                                 if (if_main_node(plan_arr[mn4_2].objectName)) {
                                                     main_node_name[1] = plan_arr[mn4_2].objectName
                                                     set_main_name(plan_arr[mn4_2])
-                                                    if(plan_arr[mn4_2].is_connected === true)set_main_color([plan_arr[mn4_2]].objectName)
+                                                    if(plan_arr[mn4_2].is_connected === true)set_main_color(plan_arr[mn4_2].objectName)
                                                     break;
                                                 }
                                                 main_node_name[1] = plan_arr[mn4_2].objectName
@@ -4818,7 +4826,7 @@ Window {
                                                 if(plan_arr[mn4_2].is_connected === true)set_main_color(plan_arr[mn4_2].objectName)
                                             }
 
-                                            for (var mn4_3 = j + 1; mn4_3 >= plan_arr.length / 2 && mn4_3 < plan_arr.length *3 / 4; mn4_3++) {
+                                            for (var mn4_3 = bound2; mn4_3 < bound3 && mn4_3 < plan_arr.length; mn4_3++) {
                                                 if (if_main_node(plan_arr[mn4_3].objectName)) {
                                                     main_node_name[2] = plan_arr[mn4_3].objectName
                                                     set_main_name(plan_arr[mn4_3])
@@ -4829,7 +4837,7 @@ Window {
                                                 set_main_name(plan_arr[mn4_3])
                                                 if(plan_arr[mn4_3].is_connected === true)set_main_color(plan_arr[mn4_3].objectName)
                                             }
-                                            for (var mn4_4 = k + 1; mn4_4 >= plan_arr.length *3 / 4 && mn4_4 < plan_arr.length; mn4_4++) {
+                                            for (var mn4_4 = bound3; mn4_4 < plan_arr.length; mn4_4++) {
                                                 if (if_main_node(plan_arr[mn4_4].objectName)) {
                                                     main_node_name[3] = plan_arr[mn4_4].objectName
                                                     set_main_name(plan_arr[mn4_4])
@@ -4860,18 +4868,12 @@ Window {
                                             send_all_airplane_pos(4,0) // 四组全更新
                                             group_num = 4
 
-                                          /*  grp_pos_mp[1] = 1 // 如果是2345 组呢
+                                            // 设置位置映射
+                                            grp_pos_mp[1] = 1
                                             grp_pos_mp[2] = 2
                                             grp_pos_mp[3] = 3
-                                            grp_pos_mp[4] = 4*/
-                                            for(i = 0; i < main_node_name.length;i++) {
-                                                for(j = 0;j < plan_arr.length;j++){
-                                                    if(plan_arr[j].objectName === main_node_name[i]) {
+                                            grp_pos_mp[4] = 4
 
-                                                        grp_pos_mp[plan_arr[j].group_id] = i + 1 // 要的是grp  不是name
-                                                    }
-                                                }
-                                            }
                                             move_model(1,4)
                                             move_model(2,4)
                                             move_model(3,4)
@@ -4966,8 +4968,18 @@ Window {
                                         return;
                                     }
 
-                                    // 如果组数已经达到4组，不能再分组
-                                    if(group_num >= 4) {
+                                    // 统计当前实际有模型的组数
+                                    var actualGroupCount = 0;
+                                    var existingGroups = {};
+                                    for(var cnt = 0; cnt < plan_arr.length; cnt++) {
+                                        if(!existingGroups[plan_arr[cnt].group_id]) {
+                                            existingGroups[plan_arr[cnt].group_id] = true;
+                                            actualGroupCount++;
+                                        }
+                                    }
+
+                                    // 如果实际组数已经达到4组，不能再分组
+                                    if(actualGroupCount >= 4) {
                                         select_merge.length = 0;
                                         for(var i1 = 0; i1 < select_merge.length; i1++) {
                                             select_merge[i1].select_color = 0.6;
@@ -4982,7 +4994,13 @@ Window {
                                         select_merge[i].select_color = 0.6;
 
                                         if(select_merge[i].is_connected === true) {
-                                            swarm_send.store_airplane_group(select_merge[i].objectName, select_merge[i].group_id, true);
+                                            // 第一个选中的会成为主机，其他的设为从机
+                                            if(i === 0) {
+                                                swarm_send.store_airplane_group(select_merge[i].objectName, select_merge[i].group_id, true, false);
+                                            } else {
+                                                // 非第一个选中的，设为从机
+                                                swarm_send.store_airplane_group(select_merge[i].objectName, select_merge[i].group_id, true, true);
+                                            }
                                         }
                                     }
 
@@ -5002,12 +5020,50 @@ Window {
                                         set_main_color(select_merge[0]);
                                     }
 
-                                    // 更新组数
-                                    var newGroupNum = Math.max(group_num, targetGroupId);
-                                    
-                                    // 设置分屏线可见性和位置映射
+                                    // 更新组数为实际组数+1（新增的组）
+                                    var newGroupNum = actualGroupCount + 1;
+
+                                    // 收集当前所有被占用的屏幕位置
+                                    var usedPositions = {};
+                                    for(var grpKey in grp_pos_mp) {
+                                        var grpId = Number(grpKey);
+                                        // 检查这个组是否真的有模型
+                                        var grpHasModels = false;
+                                        for(var chk = 0; chk < plan_arr.length; chk++) {
+                                            if(plan_arr[chk].group_id === grpId) {
+                                                grpHasModels = true;
+                                                break;
+                                            }
+                                        }
+                                        if(grpHasModels && grp_pos_mp[grpKey] > 0) {
+                                            usedPositions[grp_pos_mp[grpKey]] = grpId;
+                                            console.log("位置", grp_pos_mp[grpKey], "被组", grpId, "占用");
+                                        }
+                                    }
+
+                                    // 为新组分配一个空闲的屏幕位置
+                                    // 位置1=左上, 2=右上, 3=左下, 4=右下
+                                    // 优先分配与组号相同的位置（如第4组优先放位置4）
+                                    var newPos = 0;
+                                    if(!usedPositions[targetGroupId] && targetGroupId >= 1 && targetGroupId <= 4) {
+                                        // 优先使用与组号相同的位置
+                                        newPos = targetGroupId;
+                                        grp_pos_mp[targetGroupId] = newPos;
+                                        console.log("为组", targetGroupId, "分配对应位置", newPos);
+                                    } else {
+                                        // 否则找一个空闲的位置
+                                        for(var pos = 1; pos <= 4; pos++) {
+                                            if(!usedPositions[pos]) {
+                                                newPos = pos;
+                                                grp_pos_mp[targetGroupId] = pos;
+                                                console.log("为组", targetGroupId, "分配空闲位置", pos);
+                                                break;
+                                            }
+                                        }
+                                    }
+
+                                    // 设置分屏线可见性
                                     if(newGroupNum >= 3) {
-                                        // 3组或4组时显示所有分屏线
                                         canv.visible = true;
                                         canv2.visible = true;
                                         canv3.visible = true;
@@ -5016,58 +5072,22 @@ Window {
                                         canv2.requestPaint();
                                         canv3.requestPaint();
                                         canv4.requestPaint();
-                                        
-                                        // 为新组分配屏幕位置
-                                        // 位置1=左上, 2=右上, 3=左下, 4=右下
-                                        if(grp_pos_mp[targetGroupId] === undefined || grp_pos_mp[targetGroupId] === 0) {
-                                            // 找一个空闲的位置给新组
-                                            for(var pos = 1; pos <= 4; pos++) {
-                                                var posUsed = false;
-                                                for(var grpKey in grp_pos_mp) {
-                                                    if(grp_pos_mp[grpKey] === pos) {
-                                                        posUsed = true;
-                                                        break;
-                                                    }
-                                                }
-                                                if(!posUsed) {
-                                                    grp_pos_mp[targetGroupId] = pos;
-                                                    console.log("为组", targetGroupId, "分配位置", pos);
-                                                    break;
-                                                }
-                                            }
-                                        }
                                     } else if(newGroupNum === 2) {
-                                        // 2组时只显示中间竖线
                                         canv.visible = true;
                                         canv2.visible = true;
                                         canv3.visible = false;
                                         canv4.visible = false;
                                         canv.requestPaint();
                                         canv2.requestPaint();
-                                        
-                                        // 确保两组有正确的位置映射
-                                        if(grp_pos_mp[targetGroupId] === undefined || grp_pos_mp[targetGroupId] === 0) {
-                                            grp_pos_mp[targetGroupId] = 2; // 新组放右边
-                                        }
                                     }
-                                    
+
                                     group_num = newGroupNum;
-                                    
-                                    // 移动所有组的模型到正确位置
-                                    for(var grp = 1; grp <= group_num; grp++) {
-                                        // 检查这个组是否有模型
-                                        var hasModels = false;
-                                        for(var m = 0; m < plan_arr.length; m++) {
-                                            if(plan_arr[m].group_id === grp) {
-                                                hasModels = true;
-                                                break;
-                                            }
-                                        }
-                                        if(hasModels && grp_pos_mp[grp] !== undefined && grp_pos_mp[grp] !== 0) {
-                                            move_model(grp_pos_mp[grp], group_num);
-                                        }
+
+                                    // 将新组的模型移动到分配的屏幕位置，并检测碰撞
+                                    if(newPos > 0) {
+                                        moveGroupToPositionWithCollision(targetGroupId, newPos);
                                     }
-                                    
+
                                     if(select_merge[0].is_connected === true) {
                                         send_all_airplane_pos(targetGroupId, 0);
                                     }
@@ -5105,7 +5125,7 @@ Window {
                                         console.log("请选择至少2个主机进行合并");
                                         return;
                                     }
-                                    
+
                                     // 检查所有选中的是否都是主机
                                     for(var c = 0; c < select_merge.length; c++) {
                                         console.log("检查模型:", select_merge[c].objectName, "set_main:", select_merge[c].set_main, "类型:", typeof select_merge[c].set_main);
@@ -5115,11 +5135,11 @@ Window {
                                             return;
                                         }
                                     }
-                                    
+
                                     var targetGroup = select_merge[0].group_id;  // 目标组（第一个选中的主机所在组）
                                     var targetPos = grp_pos_mp[targetGroup];  // 目标组的屏幕位置
                                     console.log("合并到组:", targetGroup, "位置:", targetPos);
-                                    
+
                                     // 找到目标组当前占用的最大X坐标，用于放置被合并的模型
                                     var targetMaxX = 0;
                                     for(var t = 0; t < plan_arr.length; t++) {
@@ -5130,13 +5150,13 @@ Window {
                                         }
                                     }
                                     console.log("目标组最大X坐标:", targetMaxX);
-                                    
+
                                     // 处理被合并的组
                                     for(var h = 1; h < select_merge.length; h++) {
                                         var sourceGroup = select_merge[h].group_id;
                                         var sourcePos = grp_pos_mp[sourceGroup];  // 被合并组的屏幕位置
                                         console.log("合并组", sourceGroup, "位置", sourcePos, "到组", targetGroup, "位置", targetPos);
-                                        
+
                                         // 收集被合并组的所有模型，并找到它们的最小X坐标
                                         var sourceModels = [];
                                         var sourceMinX = 9999;
@@ -5153,7 +5173,7 @@ Window {
                                             }
                                         }
                                         console.log("被合并组模型数:", sourceModels.length, "最小X:", sourceMinX, "最小Y:", sourceMinY);
-                                        
+
                                         // 计算偏移量：将被合并组平移到目标组右侧
                                         // 新位置X = 目标组最大X + 1，Y保持相对位置
                                         var offsetX = (targetMaxX + 1) - sourceMinX;
@@ -5168,49 +5188,50 @@ Window {
                                         }
                                         var offsetY = targetMinY - sourceMinY;
                                         console.log("平移偏移量: offsetX=", offsetX, "offsetY=", offsetY);
-                                        
+
                                         // 平移被合并组的所有模型（保持原队形）
                                         for(var k = 0; k < sourceModels.length; k++) {
                                             var model = sourceModels[k];
                                             var newX = model.model_x + offsetX;
                                             var newY = model.model_y + offsetY;
                                             console.log("平移模型", model.objectName, "从", model.model_x, model.model_y, "到", newX, newY);
-                                            
+
                                             // 使用screen_pos_to_world_pos更新模型位置
                                             screen_pos_to_world_pos(newX, newY, model);
-                                            
+
                                             // 更新组别
                                             model.group_id = targetGroup;
                                             model.set_main = 0;
                                             model.is_main = false;
                                             if(model.is_connected) {
-                                                swarm_send.store_airplane_group(model.objectName, targetGroup, true);
+                                                // 第四个参数true表示同时发送SWARM_SET_LEADER=0，将被合并组的飞机设为从机
+                                                swarm_send.store_airplane_group(model.objectName, targetGroup, true, true);
                                             }
-                                            
+
                                             // 更新targetMaxX以便下一组合并时使用
                                             if(newX > targetMaxX) {
                                                 targetMaxX = newX;
                                             }
                                         }
-                                        
+
                                         // 清除被合并组的主机信息
                                         main_node_name[sourceGroup - 1] = 0;
-                                        
+
                                         // 清除被合并组的位置映射
                                         grp_pos_mp[sourceGroup] = 0;
                                         delete grp_pos_mp[sourceGroup];
-                                        
+
                                         // 被合并的主机也变成从机
                                         select_merge[h].set_main = 0;
                                         select_merge[h].is_main = false;
                                         select_merge[h].select_color = 0.6;
                                     }
-                                    
+
                                     select_merge[0].select_color = 0.6;
-                                    
+
                                     // 更新组数
                                     group_num = group_num - select_merge.length + 1;
-                                    
+
                                     // 根据剩余组的实际位置更新分屏线可见性
                                     // 位置: 1=左上, 2=右上, 3=左下, 4=右下
                                     // canv+canv2 = 垂直线| (分隔左右)
@@ -5219,7 +5240,7 @@ Window {
                                     var hasRight = false;  // 右边有组 (位置2或4)
                                     var hasTop = false;    // 上边有组 (位置1或2)
                                     var hasBottom = false; // 下边有组 (位置3或4)
-                                    
+
                                     for(var grpKey in grp_pos_mp) {
                                         var pos = grp_pos_mp[grpKey];
                                         if(pos === 1) { hasLeft = true; hasTop = true; }
@@ -5227,17 +5248,17 @@ Window {
                                         if(pos === 3) { hasLeft = true; hasBottom = true; }
                                         if(pos === 4) { hasRight = true; hasBottom = true; }
                                     }
-                                    
+
                                     // 垂直线：只有左右都有组时才显示
                                     var showVertical = hasLeft && hasRight;
                                     // 水平线：只有上下都有组时才显示
                                     var showHorizontal = hasTop && hasBottom;
-                                    
+
                                     canv.visible = showVertical;   // 垂直线上半
                                     canv2.visible = showVertical;  // 垂直线下半
                                     canv3.visible = showHorizontal; // 水平线左半
                                     canv4.visible = showHorizontal; // 水平线右半
-                                    
+
                                     if(showVertical) {
                                         canv.requestPaint();
                                         canv2.requestPaint();
@@ -5246,13 +5267,13 @@ Window {
                                         canv3.requestPaint();
                                         canv4.requestPaint();
                                     }
-                                    
+
                                     console.log("分界线状态: 垂直=", showVertical, "水平=", showHorizontal);
-                                    
+
                                     if(select_merge[0].is_connected === true) {
                                         send_all_airplane_pos(targetGroup, 0);
                                     }
-                                    
+
                                     select_merge.length = 0;
                                     updateGroupCounts();  // 更新各组数量显示
                                     console.log("合并完成，当前组数:", group_num);
@@ -5427,7 +5448,7 @@ Window {
                                 font.pixelSize: 11
                             }
                         }
-                        
+
                         RowLayout {
                         CustomButton {
                             text: "设置高度"
@@ -5892,13 +5913,13 @@ Window {
     property var select_merge: []
     property var arr_to_change_pos: []
     property var grp_pos_mp: {0:0} // 组别对应的屏幕位置
-    
+
     // 当前选中模型相对于主机的坐标
     property int relativeEast: 0   // 东(正) 西(负)
     property int relativeNorth: 0  // 北(正) 南(负)
     property int relativeAlt: 0    // 高度差
     property string relativeMainName: ""  // 相对的主机名称
-    
+
     // 计算相对于主机的坐标 (参考caculate_pos的计算方式)
     function updateRelativePosition(node) {
         if (!node) {
@@ -5908,7 +5929,7 @@ Window {
             relativeMainName = "";
             return;
         }
-        
+
         // 获取主机名称
         var mainName = main_node_name[node.group_id - 1];
         if (!mainName || mainName === "" || mainName === 0) {
@@ -5918,9 +5939,9 @@ Window {
             relativeMainName = "";
             return;
         }
-        
+
         relativeMainName = mainName;
-        
+
         // 如果是主机本身，坐标为0
         if (node.objectName === mainName) {
             relativeEast = 0;
@@ -5928,7 +5949,7 @@ Window {
             relativeAlt = 0;
             return;
         }
-        
+
         // 从plan_arr中查找主机节点
         var mainNode = null;
         for (var i = 0; i < plan_arr.length; i++) {
@@ -5937,24 +5958,24 @@ Window {
                 break;
             }
         }
-        
+
         if (!mainNode) {
             relativeEast = 0;
             relativeNorth = 0;
             relativeAlt = 0;
             return;
         }
-        
+
         // 获取当前节点位置 - 使用model_x/y/z，这些在移动时会实时更新
         var nodeX = node.model_x || 0;
         var nodeY = node.model_y || 0;
         var nodeZ = node.model_z || 0;
-        
+
         // 获取主机位置
         var mainX = mainNode.model_x || 0;
         var mainY = mainNode.model_y || 0;
         var mainZ = mainNode.model_z || 0;
-        
+
         // 参考caculate_pos的计算: -(y差)*间距, (x差)*间距, -(z差)
         // 东西 = (x差) * 间距
         // 南北 = -(y差) * 间距 (屏幕Y向下为正，所以取反得到北为正)
@@ -6079,7 +6100,7 @@ Window {
         // 支持传入node对象或objectName字符串
         var targetNode = null;
         var targetGroupId = 0;
-        
+
         if (typeof nodeOrName === 'string' || typeof nodeOrName === 'number') {
             // 传入的是objectName，需要找到对应的node
             for (var i = 0; i < plan_arr.length; i++) {
@@ -6093,9 +6114,9 @@ Window {
             targetNode = nodeOrName;
             targetGroupId = nodeOrName.group_id;
         }
-        
+
         if (!targetNode || !targetGroupId) return;
-        
+
         // 设置主机颜色，并将同组其他模型设为从机颜色
         for (var n = 0; n < plan_arr.length; n++) {
             if (plan_arr[n].group_id === targetGroupId) {
@@ -6126,16 +6147,87 @@ Window {
         }
         return 0
     }
-    
+
+    // 将指定组的模型移动到指定屏幕位置，带碰撞检测
+    function moveGroupToPositionWithCollision(groupId, screenPos) {
+        console.log("moveGroupToPositionWithCollision: groupId=", groupId, "screenPos=", screenPos);
+
+        // 根据屏幕位置计算起始坐标和边界
+        // 位置: 1=左上, 2=右上, 3=左下, 4=右下
+        var startX = 0;
+        var startY = 0;
+        var maxX = 0;
+        var maxY = 0;
+        var halfWidth = Math.floor(control.width / 2 / 40);
+        var halfHeight = Math.floor(control.height / 2 / 40);
+        var fullWidth = Math.floor(control.width / 40) - 1;
+        var fullHeight = Math.floor(control.height / 40) - 1;
+
+        if(screenPos === 1) {
+            startX = 0; startY = 0;
+            maxX = halfWidth - 1; maxY = halfHeight - 1;
+        } else if(screenPos === 2) {
+            startX = halfWidth + 1; startY = 0;
+            maxX = fullWidth; maxY = halfHeight - 1;
+        } else if(screenPos === 3) {
+            startX = 0; startY = halfHeight + 1;
+            maxX = halfWidth - 1; maxY = fullHeight;
+        } else if(screenPos === 4) {
+            startX = halfWidth + 1; startY = halfHeight + 1;
+            maxX = fullWidth; maxY = fullHeight;
+        }
+
+        console.log("区域范围: startX=", startX, "startY=", startY, "maxX=", maxX, "maxY=", maxY);
+
+        // 收集该组的所有模型
+        var groupModels = [];
+        for(var i = 0; i < plan_arr.length; i++) {
+            if(plan_arr[i].group_id === groupId) {
+                groupModels.push(plan_arr[i]);
+            }
+        }
+
+        // 逐个放置模型，检测碰撞
+        var xx = startX;
+        var yy = startY;
+
+        for(var j = 0; j < groupModels.length; j++) {
+            var model = groupModels[j];
+
+            // 找到一个没有碰撞的位置
+            while(transform_crush(xx, yy, groupId) && xx <= maxX) {
+                xx++;
+                if(xx > maxX) {
+                    xx = startX;
+                    yy++;
+                    if(yy > maxY) {
+                        console.log("警告：区域内没有足够空间放置模型");
+                        break;
+                    }
+                }
+            }
+
+            console.log("放置模型", model.objectName, "到位置:", xx, yy);
+            screen_pos_to_world_pos(xx, yy, model);
+
+            // 移动到下一个位置
+            xx++;
+            if(xx > maxX) {
+                xx = startX;
+                yy++;
+            }
+        }
+    }
+
     // 直接根据组号移动该组所有模型到指定屏幕位置
     function moveGroupModels(groupId, screenPos, totalGroups) {
         var xx = 0;
         var yy = 0;
         var mstart = 0;
         var lim = 0;
-        
+
         console.log("moveGroupModels: groupId=", groupId, "screenPos=", screenPos, "totalGroups=", totalGroups);
-        
+
         // 根据屏幕位置和总组数计算起始坐标
         // 位置: 1=左上, 2=右上, 3=左下, 4=右下
         if(screenPos === 1) {
@@ -6159,9 +6251,9 @@ Window {
             yy = Math.floor(control.height / 2 / 40) + 1;
             lim = Math.floor(control.width / 40) - 2;
         }
-        
+
         console.log("位置参数: xx=", xx, "yy=", yy, "lim=", lim, "mstart=", mstart);
-        
+
         // 直接根据group_id移动模型
         for(var i = 0; i < plan_arr.length; i++) {
             if(plan_arr[i].group_id === groupId) {
@@ -6178,7 +6270,7 @@ Window {
             }
         }
     }
-    
+
     function move_model(n,sumn) {// n 指屏幕位置
         var xx = 0
         var yy = 0

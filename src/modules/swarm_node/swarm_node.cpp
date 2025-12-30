@@ -810,13 +810,13 @@ void Swarm_Node::handle_parameter_update()
 		parameter_update_s param_update;
 		_parameter_update_sub.copy(&param_update);
 
-		//  保存旧的_set_as_leader值，用于检测主机切换
+		// 保存旧值，用于检测变化
 		bool old_set_as_leader = _set_as_leader;
+		int old_group_id = _group_id;
 
 		updateParams();
 
-		//  关键：参数更新后，重新设置swarm信息（包括_set_as_leader和_group_id）
-		// 这样当QGC动态改变主机选择时，follower能够及时响应
+		// 关键：参数更新后，重新设置swarm信息（包括_set_as_leader和_group_id）
 		set_swarm_info(_param_swarm_set_leader.get(), _param_swarm_group_id.get());
 
 		// 更新角色管理器（头号主机组号默认为1）
@@ -832,25 +832,40 @@ void Swarm_Node::handle_parameter_update()
 			_role_manager.clear_role_changed();
 		}
 
-		//  关键修复：如果主机角色发生变化（从机变主机或主机变从机），需要重新初始化状态机
-		if (old_set_as_leader != _set_as_leader) {
-			PX4_WARN("[主机切换] 飞机%d: 角色从%s切换为%s，重新初始化状态机",
-				 vehicle_id, old_set_as_leader ? "主机" : "从机", _set_as_leader ? "主机" : "从机");
+		// 关键修复：检测组号变化或主机角色变化
+		bool group_changed = (old_group_id != _group_id);
+		bool leader_changed = (old_set_as_leader != _set_as_leader);
+
+		if (group_changed || leader_changed) {
+			if (group_changed) {
+				PX4_WARN("[组号变更] 飞机%d: 从组%d切换到组%d，清除旧主机信息",
+					 vehicle_id, old_group_id, _group_id);
+			}
+			if (leader_changed) {
+				PX4_WARN("[主机切换] 飞机%d: 角色从%s切换为%s",
+					 vehicle_id, old_set_as_leader ? "主机" : "从机", _set_as_leader ? "主机" : "从机");
+			}
+
+			// 清除组协调器中的旧主机信息
+			_group_coordinator.clear_leader();
+
+			// 清除缓存的主机位置信息
+			_leader_sp_glo_pos = uav_info_s{};
 
 			// 重置初始化标志，强制重新初始化
 			_init_done = false;
 
-			// 重置状态机到INIT状态，让它重新根据新的角色进入正确的状态
+			// 重置状态机到INIT状态
 			STATE = state::INIT;
 
 			// 重新设置偏移量
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 			_offset_initialized = false;
 
-			// 清除组协调器中的主机信息
-			_group_coordinator.clear_leader();
+			PX4_INFO("[重新初始化] 飞机%d: 组=%d, 主机=%d, 准备重新匹配主机",
+				 vehicle_id, _group_id, _set_as_leader);
 		} else {
-			// 角色未变化，只重新设置偏移量
+			// 组号和角色都未变化，只重新设置偏移量
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 			_offset_initialized = false;
 		}
