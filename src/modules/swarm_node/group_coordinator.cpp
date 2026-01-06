@@ -4,6 +4,8 @@
  */
 
 #include "group_coordinator.hpp"
+#include <drivers/drv_hrt.h>
+#include <px4_platform_common/log.h>
 
 void GroupCoordinator::set_self_info(int vehicle_id, int group_id, bool is_leader)
 {
@@ -26,16 +28,19 @@ bool GroupCoordinator::is_my_group_leader(const uav_info_s &uav_info) const
 bool GroupCoordinator::detect_other_leader_in_group(const uav_info_s &uav_info) const
 {
     // 检测同组是否有其他主机（用于多主机冲突检测）
-    // 条件：组号相同、是主机、不是自己
-    return (uav_info.group_id == static_cast<uint32_t>(_group_id)) &&
-           (uav_info.is_leader) &&
-           (uav_info.mavid != static_cast<uint32_t>(_vehicle_id));
+    return is_my_group_leader(uav_info);
 }
 
 bool GroupCoordinator::try_update_leader(const uav_info_s &uav_info)
 {
     // 检查是否为同组主机
     if (!is_my_group_leader(uav_info)) {
+        // 如果收到的消息来自当前主机但 is_leader=0，说明主机已切换
+        if (_has_valid_leader && uav_info.mavid == _leader_info.mavid && !uav_info.is_leader) {
+            _leader_info = uav_info_s{};
+            _has_valid_leader = false;
+            _leader_update_time = 0;
+        }
         return false;
     }
 
@@ -44,21 +49,32 @@ bool GroupCoordinator::try_update_leader(const uav_info_s &uav_info)
         return false;
     }
 
-    // 多主机处理：如果已有主机，选择ID最小的
-    if (_has_valid_leader) {
-        if (uav_info.mavid < _leader_info.mavid) {
-            // 新主机ID更小，切换到新主机
-            _leader_info = uav_info;
-        } else if (uav_info.mavid == _leader_info.mavid) {
-            // 同一个主机，更新信息
-            _leader_info = uav_info;
-        }
-        // 如果新主机ID更大，忽略（保持跟随ID更小的主机）
-    } else {
-        // 首次找到主机
-        _leader_info = uav_info;
-        _has_valid_leader = true;
+    uint64_t current_time = hrt_absolute_time();
 
+    // 多主机冲突处理：保持跟随当前主机，忽略其他主机
+    if (_has_valid_leader && _leader_info.mavid != uav_info.mavid) {
+        bool current_leader_timeout = (current_time - _leader_info.timestamp) > LEADER_TIMEOUT_US;
+        if (!current_leader_timeout) {
+            return true;  // 当前主机信号正常，忽略其他主机
+        }
+    }
+
+    _leader_info = uav_info;
+    _has_valid_leader = true;
+    _leader_update_time = current_time;
+    return true;
+}
+
+bool GroupCoordinator::has_valid_leader() const
+{
+    if (!_has_valid_leader) {
+        return false;
+    }
+
+    // 检查主机信息是否过期
+    uint64_t current_time = hrt_absolute_time();
+    if ((current_time - _leader_info.timestamp) > LEADER_TIMEOUT_US) {
+        return false;
     }
 
     return true;
@@ -68,4 +84,5 @@ void GroupCoordinator::clear_leader()
 {
     _leader_info = uav_info_s{};
     _has_valid_leader = false;
+    _leader_update_time = 0;
 }

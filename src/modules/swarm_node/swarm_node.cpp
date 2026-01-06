@@ -637,8 +637,13 @@ void Swarm_Node::start_swarm_node()
 
 		// 更新主机信息
 		if (!update_leader_info(selected_leader_id)) {
-			PX4_WARN("主从跟随问题: _leader_sp_glo_pos无效 lat=%.6f lon=%.6f mav_id=%u",
-				 (double)_leader_sp_glo_pos.lat, (double)_leader_sp_glo_pos.lon, _leader_sp_glo_pos.mavid);
+			// 没有找到主机，发送心跳保持OFFBOARD模式，悬停在当前位置
+			matrix::Vector3f current_pos(_vehicle_local_position.x,
+						     _vehicle_local_position.y,
+						     _vehicle_local_position.z);
+			matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
+			float current_yaw = _vehicle_local_position.heading;
+			control_instance::getInstance()->Control_pos_vel_yaw(current_pos, zero_vel, current_yaw, 0.f);
 			return;
 		}
 
@@ -816,68 +821,42 @@ void Swarm_Node::handle_parameter_update()
 
 		updateParams();
 
-		// 关键：参数更新后，重新设置swarm信息（包括_set_as_leader和_group_id）
 		set_swarm_info(_param_swarm_set_leader.get(), _param_swarm_group_id.get());
-
-		// 更新角色管理器（头号主机组号默认为1）
 		_role_manager.update(_set_as_leader, _group_id, 1);
-
-		// 更新组间协调器
 		_group_coordinator.set_self_info(vehicle_id, _group_id, _set_as_leader);
 
-		// 检测角色变化并输出日志
 		if (_role_manager.role_changed()) {
-			PX4_INFO("[角色变更] 飞机%d: 变更为 %s (组%d)",
-				 vehicle_id, _role_manager.get_role_name(), _group_id);
 			_role_manager.clear_role_changed();
 		}
 
-		// 关键修复：检测组号变化或主机角色变化
 		bool group_changed = (old_group_id != _group_id);
 		bool leader_changed = (old_set_as_leader != _set_as_leader);
 
 		if (group_changed || leader_changed) {
-			if (group_changed) {
-				PX4_WARN("[组号变更] 飞机%d: 从组%d切换到组%d，清除旧主机信息",
-					 vehicle_id, old_group_id, _group_id);
-			}
-			if (leader_changed) {
-				PX4_WARN("[主机切换] 飞机%d: 角色从%s切换为%s",
-					 vehicle_id, old_set_as_leader ? "主机" : "从机", _set_as_leader ? "主机" : "从机");
-			}
-
-			// 清除组协调器中的旧主机信息
 			_group_coordinator.clear_leader();
-
-			// 清除缓存的主机位置信息
 			_leader_sp_glo_pos = uav_info_s{};
-
-			// 重置初始化标志，强制重新初始化
-			_init_done = false;
-
-			// 重置状态机到INIT状态
-			STATE = state::INIT;
-
-			// 重新设置偏移量
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 			_offset_initialized = false;
 
-			PX4_INFO("[重新初始化] 飞机%d: 组=%d, 主机=%d, 准备重新匹配主机",
-				 vehicle_id, _group_id, _set_as_leader);
+			if (STATE == state::CONTROL) {
+				// 主机变从机：先Hold再OFFBOARD
+				if (old_set_as_leader && !_set_as_leader) {
+					_vehicle_local_position_sub.copy(&_vehicle_local_position);
+					control_instance::getInstance()->Auto_hold();
+					px4_usleep(200000);
+					control_instance::getInstance()->Change_offborad();
+				}
+				// 从机变主机：切换到Hold
+				else if (!old_set_as_leader && _set_as_leader) {
+					control_instance::getInstance()->Auto_hold();
+				}
+			} else {
+				_init_done = false;
+				STATE = state::INIT;
+			}
 		} else {
-			// 组号和角色都未变化，只重新设置偏移量
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 			_offset_initialized = false;
-		}
-
-		// 调试输出：显示参数更新
-		static uint64_t last_param_log = 0;
-		uint64_t now = hrt_absolute_time();
-		if (now - last_param_log > 2000000) {  // 每2秒最多输出一次
-			PX4_INFO("[参数更新] 飞机%d: SWARM_SET_LEADER=%d, SWARM_GROUP_ID=%d, SWARM_LEADER_ID=%d, 角色=%s",
-				 vehicle_id, _param_swarm_set_leader.get(), _param_swarm_group_id.get(),
-				 _param_swarm_leader_id.get(), _role_manager.get_role_name());
-			last_param_log = now;
 		}
 	}
 }
@@ -889,14 +868,11 @@ void Swarm_Node::handle_init_state()
 	if (swarm_node_init()) {
 		if (!_set_as_leader) {
 			STATE = state::ARM_OFFBOARD;
-			PX4_INFO("STATE = state::ARM_OFFBOARD;");
 		} else if (_set_as_leader) {
 			if (_swarm_start_flag.start_swarm_auto) {
 				STATE = state::ARM_AUTO;
-				PX4_INFO("STATE = state::ARM_AUTO;");
 			} else if (_swarm_start_flag.start_swarm) {
 				STATE = state::ARM_LEADER;
-				PX4_INFO("STATE = state::ARM_LEADER;");
 			}
 		}
 	}
@@ -990,6 +966,14 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 
 		//  头号主机：只发布位置信息，不需要避撞
 		// 主机的控制完全由PX4的任务系统（AUTO模式）或用户手动控制
+
+		// 关键：主机也需要持续发送 OFFBOARD 心跳信号
+		// 这样当主机切换为从机时，PX4 已经有 OFFBOARD 信号，可以无缝切换
+		matrix::Vector3f current_pos(vehicle_local_pos.x, vehicle_local_pos.y, vehicle_local_pos.z);
+		matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
+		float current_yaw = vehicle_local_pos.heading;
+		control_instance::getInstance()->Control_pos_vel_yaw(current_pos, zero_vel, current_yaw, 0.f);
+
 		return;  // 主机提前返回，不执行后续的跟随控制逻辑
 	}
 

@@ -6,12 +6,16 @@
  * - 从机查找并跟随同组主机
  * - 验证主机信息是否属于同组
  * - 处理同组多主机情况（选择ID最小的）
+ * - 支持飞行中动态切换主机
  */
 
 #pragma once
 
 #include <uORB/topics/uav_info.h>
 #include <px4_platform_common/defines.h>
+
+// 主机信息超时时间（2秒）
+static constexpr uint64_t LEADER_TIMEOUT_US = 2000000;
 
 /**
  * @brief 组间协调器类
@@ -52,9 +56,9 @@ public:
     const uav_info_s& get_leader_info() const { return _leader_info; }
 
     /**
-     * @brief 检查是否有有效的同组主机
+     * @brief 检查是否有有效的同组主机（包含超时检查）
      */
-    bool has_valid_leader() const { return _has_valid_leader; }
+    bool has_valid_leader() const;
 
     /**
      * @brief 清除主机信息（用于主机切换时）
@@ -85,4 +89,5 @@ private:
 
     uav_info_s _leader_info{};
     bool _has_valid_leader{false};
+    uint64_t _leader_update_time{0};  // 主机信息最后更新时间
 };
