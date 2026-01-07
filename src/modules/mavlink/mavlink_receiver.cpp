@@ -3555,6 +3555,8 @@ MavlinkReceiver::handle_message_swarm_start_flag(mavlink_message_t *msg){
 		_swarm_start_flag.start_swarm = _swarm_start_flag_msg.start_swarm;
 		_swarm_start_flag.start_swarm_auto = _swarm_start_flag_msg.start_swarm_auto;
 		_swarm_start_flag.stop_swarm = _swarm_start_flag_msg.stop_swarm;
+		_swarm_start_flag.pause_swarm = _swarm_start_flag_msg.Pause_swarm;
+		_swarm_start_flag.continue_swarm = _swarm_start_flag_msg.continue_swarm;
 		_swarm_start_flag_pub.publish(_swarm_start_flag);
 
 

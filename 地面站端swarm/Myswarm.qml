@@ -252,19 +252,19 @@ Window {
                 }*/
 
                 // // 飞行管理
-                // RowLayout {
-                //     spacing: 10
-                //     CustomButton {
-                //         text: "暂停";
-                //         color: root.accentColor;
-                //         onClicked: test_mavlink._sendcom2(0,0,0,separate_main,0)
-                //     }
-                //     CustomButton {
-                //         text: "继续";
-                //         color: secondaryColor;
-                //         onClicked: test_mavlink._sendcom(0,0,0,0,separate_main)
-                //     }
-                // }
+                RowLayout {
+                    spacing: 10
+                    CustomButton {
+                        text: "暂停";
+                        color: root.accentColor;
+                        onClicked: test_mavlink._sendcom(0,0,0,separate_main,0)
+                    }
+                    CustomButton {
+                        text: "继续";
+                        color: secondaryColor;
+                        onClicked: test_mavlink._sendcom(0,0,0,0,separate_main)
+                    }
+                }
 
 
             }
@@ -4994,7 +4994,13 @@ Window {
                                         select_merge[i].select_color = 0.6;
 
                                         if(select_merge[i].is_connected === true) {
-                                            swarm_send.store_airplane_group(select_merge[i].objectName, select_merge[i].group_id, true);
+                                            // 第一个选中的会成为主机，其他的设为从机
+                                            if(i === 0) {
+                                                swarm_send.store_airplane_group(select_merge[i].objectName, select_merge[i].group_id, true, false);
+                                            } else {
+                                                // 非第一个选中的，设为从机
+                                                swarm_send.store_airplane_group(select_merge[i].objectName, select_merge[i].group_id, true, true);
+                                            }
                                         }
                                     }
 

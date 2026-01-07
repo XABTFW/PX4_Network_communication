@@ -913,6 +913,9 @@ void Swarm_Node::handle_arm_offboard_state()
 // 处理 CONTROL 状态
 void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_info)
 {
+	// 更新 swarm_start_flag，确保能收到暂停/继续指令
+	_swarm_start_flag_sub.copy(&_swarm_start_flag);
+
 	//  主机处理逻辑
 	if (_set_as_leader) {
 		// 主机：发布自己的位置信息，让从机能够接收到
@@ -972,6 +975,31 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 		matrix::Vector3f current_pos(vehicle_local_pos.x, vehicle_local_pos.y, vehicle_local_pos.z);
 		matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
 		float current_yaw = vehicle_local_pos.heading;
+
+		//  主机暂停/继续检查
+		if (_swarm_start_flag.continue_swarm == 1) {
+			// 收到继续指令，恢复mission
+			PX4_INFO("[继续] 主机%d 恢复mission执行", vehicle_id);
+			control_instance::getInstance()->Change_Auto();
+
+			// 清除暂停和继续标志
+			swarm_start_flag_s clear_flag = _swarm_start_flag;
+			clear_flag.pause_swarm = 0;
+			clear_flag.continue_swarm = 0;
+			_start_flag_pub.publish(clear_flag);
+		} else if (_swarm_start_flag.pause_swarm == 1) {
+			// 暂停状态：切换到HOLD模式悬停
+			control_instance::getInstance()->Auto_hold();
+
+			static uint64_t last_leader_pause_log = 0;
+			uint64_t now_pause = hrt_absolute_time();
+			if (now_pause - last_leader_pause_log > 2000000) {
+				PX4_INFO("[暂停] 主机%d 暂停mission，切换到HOLD模式悬停...", vehicle_id);
+				last_leader_pause_log = now_pause;
+			}
+			return;
+		}
+
 		control_instance::getInstance()->Control_pos_vel_yaw(current_pos, zero_vel, current_yaw, 0.f);
 
 		return;  // 主机提前返回，不执行后续的跟随控制逻辑
@@ -1063,10 +1091,42 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 		first_loop = 0;
 	}
 
-	//  6. 暂停集群控制
-	if (_swarm_start_flag.pause_swarm == 1) {
-		STATE = _set_as_leader ? state::ARM_AUTO : state::ARM_OFFBOARD;
-		return;
+	//  6. 暂停/继续集群控制
+	if (_swarm_start_flag.continue_swarm == 1) {
+		PX4_INFO("[继续] 飞机%d 收到继续指令，恢复任务执行", vehicle_id);
+
+		// 清除暂停和继续标志
+		swarm_start_flag_s clear_flag = _swarm_start_flag;
+		clear_flag.pause_swarm = 0;
+		clear_flag.continue_swarm = 0;
+		_start_flag_pub.publish(clear_flag);
+		// 不return，继续执行后续的 start_swarm_node()
+	} else if (_swarm_start_flag.pause_swarm == 1) {
+		// 暂停状态：悬停在当前位置
+		_vehicle_local_position_sub.copy(&_vehicle_local_position);
+		matrix::Vector3f current_pos(_vehicle_local_position.x, _vehicle_local_position.y, _vehicle_local_position.z);
+		matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
+
+			// 发送悬停指令：保持当前位置，速度为0
+			control_instance::getInstance()->Control_pos_vel_yaw(
+				current_pos,
+				zero_vel,
+				_vehicle_local_position.heading,  // 保持当前航向
+				0.f  // 航向角速度为0
+			);
+
+			// 继续发布位置信息，供其他飞机避撞使用
+			_sensor_gps_sub.copy(&_sensor_gps);
+			_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps,
+							   _group_id, _set_as_leader, true);
+
+			static uint64_t last_pause_log = 0;
+			uint64_t now = hrt_absolute_time();
+			if (now - last_pause_log > 2000000) {  // 每2秒打印一次
+				PX4_INFO("[暂停] 飞机%d 悬停中，等待继续指令...", vehicle_id);
+				last_pause_log = now;
+			}
+			return;
 	}
 
 	//  7. 从机执行跟随控制逻辑
