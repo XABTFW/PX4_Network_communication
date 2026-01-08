@@ -851,12 +851,19 @@ void Swarm_Node::handle_parameter_update()
 				 old_set_as_leader ? "主机" : "从机",
 				 _set_as_leader ? "主机" : "从机");
 		}
-		
+
 		if (group_changed || leader_changed) {
 			_group_coordinator.clear_leader();
 			_leader_sp_glo_pos = uav_info_s{};
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 			_offset_initialized = false;
+
+			// 重置目标位置为当前位置，避免切换时飞向旧目标
+			_vehicle_local_position_sub.copy(&_vehicle_local_position);
+			_sp_position(0) = _vehicle_local_position.x;
+			_sp_position(1) = _vehicle_local_position.y;
+			_sp_position(2) = _vehicle_local_position.z;
+			_last_target_valid = false;
 
 			if (STATE == state::CONTROL) {
 				// 主机变从机：先Hold再OFFBOARD
