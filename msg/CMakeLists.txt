@@ -274,6 +274,7 @@ set(msg_files
 	FollowerInfo.msg
 	SwarmStartFlag.msg
 	LeaderId.msg
+	SwarmOperationAck.msg
 	test_mavlink_tx.msg
 	test_mavlink_rx.msg
 )

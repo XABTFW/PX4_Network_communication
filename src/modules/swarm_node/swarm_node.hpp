@@ -24,6 +24,7 @@
 #include <uORB/topics/follower_info.h>
 #include <uORB/topics/swarm_start_flag.h>
 #include <uORB/topics/leader_id.h>
+#include <uORB/topics/swarm_operation_ack.h>
 #include "position_sharing.hpp"
 #include "velocity_obstacle_controller.hpp"
 #include "formation_planner.hpp"
@@ -127,6 +128,9 @@ private:
 	void handle_idle_state(swarm_start_flag_s _start_flag);
 	void handle_manual_takeover(vehicle_status_s _state);
 
+	// 发布操作确认消息
+	void publish_operation_ack(uint8_t op_type, uint32_t old_val, uint32_t new_val, bool success);
+
 	enum state {
 		INIT = 0,
 		ARM_OFFBOARD,
@@ -204,6 +208,8 @@ private:
 	uORB::Publication<swarm_start_flag_s>			_start_flag_pub{ORB_ID(swarm_start_flag)};
 
 	uORB::Publication<uav_info_s>			_uav_info_pub{ORB_ID(uav_info)};
+	uORB::Publication<swarm_operation_ack_s>	_swarm_op_ack_pub{ORB_ID(swarm_operation_ack)};
+
 
 	// Performance (perf) counters
 	perf_counter_t	_loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")};

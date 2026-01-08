@@ -832,6 +832,26 @@ void Swarm_Node::handle_parameter_update()
 		bool group_changed = (old_group_id != _group_id);
 		bool leader_changed = (old_set_as_leader != _set_as_leader);
 
+		// 发送操作确认消息
+		if (group_changed) {
+			publish_operation_ack(swarm_operation_ack_s::OP_GROUP_CHANGE,
+					      static_cast<uint32_t>(old_group_id),
+					      static_cast<uint32_t>(_group_id),
+					      true);
+			PX4_INFO("[操作确认] 飞机%d: 组号从%d切换到%d", vehicle_id, old_group_id, _group_id);
+		}
+
+		if (leader_changed) {
+			publish_operation_ack(swarm_operation_ack_s::OP_LEADER_CHANGE,
+					      static_cast<uint32_t>(old_set_as_leader ? 1 : 0),
+					      static_cast<uint32_t>(_set_as_leader ? 1 : 0),
+					      true);
+			PX4_INFO("[操作确认] 飞机%d: 角色从%s切换到%s",
+				 vehicle_id,
+				 old_set_as_leader ? "主机" : "从机",
+				 _set_as_leader ? "主机" : "从机");
+		}
+		
 		if (group_changed || leader_changed) {
 			_group_coordinator.clear_leader();
 			_leader_sp_glo_pos = uav_info_s{};
@@ -1308,5 +1328,26 @@ bool Swarm_Node::uav_takeoff_altitude(matrix::Vector3f vehicle_own_position, mat
 		return true;
 	}
 	return false;
+}
+
+
+/**
+ * @brief 发布操作确认消息
+ * @param op_type 操作类型 (OP_GROUP_CHANGE=1, OP_LEADER_CHANGE=2)
+ * @param old_val 操作前的值
+ * @param new_val 操作后的值
+ * @param success 操作是否成功
+ */
+void Swarm_Node::publish_operation_ack(uint8_t op_type, uint32_t old_val, uint32_t new_val, bool success)
+{
+	swarm_operation_ack_s ack{};
+	ack.timestamp = hrt_absolute_time();
+	ack.target_system = static_cast<uint8_t>(vehicle_id);
+	ack.operation_type = op_type;
+	ack.result = success ? swarm_operation_ack_s::RESULT_SUCCESS : swarm_operation_ack_s::RESULT_FAILED;
+	ack.old_value = old_val;
+	ack.new_value = new_val;
+
+	_swarm_op_ack_pub.publish(ack);
 }
 
