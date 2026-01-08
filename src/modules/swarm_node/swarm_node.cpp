@@ -591,6 +591,13 @@ void Swarm_Node::update_setpoint_filter(float current_speed_xy, bool need_avoida
 	// 计算期望位置并进行滤波
 	matrix::Vector3f desired_position = _sp_position + _sp_offset;
 
+	// 检查是否设置了绝对高度
+	float abs_alt = _param_swarm_abs_alt.get();
+	if (abs_alt > 0.1f) {
+		// 使用绝对高度覆盖Z坐标（NED坐标系，向下为正，所以取负值）
+		desired_position(2) = -abs_alt;
+	}
+
 	if (!_filter_initialized) {
 		_sp_position_filtered = desired_position;
 		_sp_vel_filtered = _sp_vel;
@@ -858,13 +865,6 @@ void Swarm_Node::handle_parameter_update()
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 			_offset_initialized = false;
 
-			// 重置目标位置为当前位置，避免切换时飞向旧目标
-			_vehicle_local_position_sub.copy(&_vehicle_local_position);
-			_sp_position(0) = _vehicle_local_position.x;
-			_sp_position(1) = _vehicle_local_position.y;
-			_sp_position(2) = _vehicle_local_position.z;
-			_last_target_valid = false;
-
 			if (STATE == state::CONTROL) {
 				// 主机变从机：先Hold再OFFBOARD
 				if (old_set_as_leader && !_set_as_leader) {
@@ -1002,6 +1002,13 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 		matrix::Vector3f current_pos(vehicle_local_pos.x, vehicle_local_pos.y, vehicle_local_pos.z);
 		matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
 		float current_yaw = vehicle_local_pos.heading;
+
+		// 检查是否设置了绝对高度
+		float abs_alt = _param_swarm_abs_alt.get();
+		if (abs_alt > 0.1f) {
+			// 使用绝对高度（NED坐标系，向下为正，所以取负值）
+			current_pos(2) = -abs_alt;
+		}
 
 		//  主机暂停/继续检查
 		if (_swarm_start_flag.continue_swarm == 1) {
@@ -1357,4 +1364,3 @@ void Swarm_Node::publish_operation_ack(uint8_t op_type, uint32_t old_val, uint32
 
 	_swarm_op_ack_pub.publish(ack);
 }
-

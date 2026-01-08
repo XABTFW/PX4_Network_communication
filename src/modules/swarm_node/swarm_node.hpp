@@ -210,7 +210,6 @@ private:
 	uORB::Publication<uav_info_s>			_uav_info_pub{ORB_ID(uav_info)};
 	uORB::Publication<swarm_operation_ack_s>	_swarm_op_ack_pub{ORB_ID(swarm_operation_ack)};
 
-
 	// Performance (perf) counters
 	perf_counter_t	_loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")};
 	perf_counter_t	_loop_interval_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": interval")};
@@ -225,6 +224,7 @@ private:
 		(ParamFloat<px4::params::SWARM_X_OFFSET>)    _param_swarm_X_offset,
 		(ParamFloat<px4::params::SWARM_Y_OFFSET>)    _param_swarm_Y_offset,
 		(ParamFloat<px4::params::SWARM_Z_OFFSET>)    _param_swarm_Z_offset,
+		(ParamFloat<px4::params::SWARM_ABS_ALT>)     _param_swarm_abs_alt,  // 绝对高度参数
 
 		// APF配置参数
 		(ParamInt<px4::params::SWARM_APF_ENABLE>) _param_apf_enable,

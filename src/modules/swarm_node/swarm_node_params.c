@@ -116,6 +116,24 @@ PARAM_DEFINE_FLOAT(SWARM_Y_OFFSET, 0.00f);
  */
 PARAM_DEFINE_FLOAT(SWARM_Z_OFFSET, 0.00f);
 
+
+/**
+ * Absolute altitude for swarm aircraft
+ *
+ * Set the absolute altitude for this aircraft in the swarm.
+ * When set to a positive value, the aircraft will fly at this altitude
+ * regardless of whether it's a leader or follower.
+ * Value of 0 means use default behavior (follow leader + offset).
+ *
+ * @unit m
+ * @min 0.0
+ * @max 100.0
+ * @decimal 1
+ * @increment 1.0
+ * @group Swarm
+ */
+PARAM_DEFINE_FLOAT(SWARM_ABS_ALT, 0.0f);
+
 /**
  * Enable APF collision avoidance
  *
