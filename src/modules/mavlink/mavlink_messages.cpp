@@ -135,6 +135,7 @@
 # include "streams/LEADER_ID.hpp"
 # include "streams/UAV_INFO.hpp"
 # include "streams/SWARM_OPERATION_ACK.hpp"
+# include "streams/SWARM_MISSION_ITEM.hpp"
 
 
 #if !defined(CONSTRAINED_FLASH)
@@ -257,6 +258,7 @@ static const StreamListItem streams_list[] = {
 	create_stream_list_item<MavlinkStreamLeaderidinfo>(),
 	create_stream_list_item<MavlinkStreamUavInfo>(),
 	create_stream_list_item<MavlinkStreamSwarmOperationAck>(),
+	create_stream_list_item<MavlinkStreamSwarmMissionItem>(),
 
 
 #if defined(HEARTBEAT_HPP)

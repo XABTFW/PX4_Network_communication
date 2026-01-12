@@ -116,6 +116,7 @@
 #include <uORB/topics/uav_info.h>
 #include <uORB/topics/follower_info.h>
 #include <uORB/topics/swarm_start_flag.h>
+#include <uORB/topics/swarm_mission_item.h>
 #include <uORB/topics/leader_id.h>
 #include <uORB/topics/test_mavlink_rx.h>
 
@@ -166,6 +167,7 @@ private:
 
 	void handle_message_swarm_start_flag(mavlink_message_t *msg);
 	void handle_message_uav_info(mavlink_message_t *msg);
+	void handle_message_swarm_mission_item(mavlink_message_t *msg);
 	void handle_message_leader_group_id(mavlink_message_t *msg);
 
 	void handle_message_test_mavlink_rx(mavlink_message_t *msg);
@@ -312,6 +314,7 @@ private:
 	uORB::Publication<uav_info_s>				_uav_info_pub{ORB_ID(uav_info)};
 	uORB::Publication<follower_info_s>				_follower_info_pub{ORB_ID(follower_info)};
 	uORB::Publication<swarm_start_flag_s>				_swarm_start_flag_pub{ORB_ID(swarm_start_flag)};
+	uORB::Publication<swarm_mission_item_s>			_swarm_mission_item_pub{ORB_ID(swarm_mission_item)};
 	uORB::Publication<leader_id_s>				_group_id_Pub{ORB_ID(leader_id)};
 
 	uORB::Publication<test_mavlink_rx_s> 		_test_mavlink_rx_pub{ORB_ID(test_mavlink_rx)};

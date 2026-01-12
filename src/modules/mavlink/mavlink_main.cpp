@@ -1417,6 +1417,7 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 	configure_stream_local("UAV_INFO",unlimited_rate);
 	configure_stream_local("LEADER_ID",unlimited_rate);
 	configure_stream_local("SWARM_OPERATION_ACK", unlimited_rate);
+	configure_stream_local("SWARM_MISSION_ITEM", unlimited_rate);
 	configure_stream_local("TEST_MAVLINK", unlimited_rate);
 
 	switch (_mode) {

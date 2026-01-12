@@ -88,8 +88,12 @@ bool Swarm_Node::swarm_node_init()
 	_role_manager.update(_set_as_leader, _group_id, 1);  // 头号主机组号默认为1
 	_group_coordinator.set_self_info(vehicle_id, _group_id, _set_as_leader);
 
-	PX4_INFO("[初始化] 飞机%d: 组号=%d, 角色=%s",
-		 vehicle_id, _group_id, _role_manager.get_role_name());
+	// 初始化任务同步模块（只初始化一次）
+	static bool mission_sync_initialized = false;
+	if (!mission_sync_initialized) {
+		_mission_sync.init(vehicle_id, _group_id, _set_as_leader);
+		mission_sync_initialized = true;
+	}
 
 	bool swarm_active = (_swarm_start_flag.start_swarm || _swarm_start_flag.start_swarm_auto);
 
@@ -103,6 +107,11 @@ bool Swarm_Node::swarm_node_init()
 		}
 
 		_init_done = true;
+
+		// 只在初始化完成时输出一次日志
+		PX4_INFO("[初始化完成] 飞机%d: 组号=%d, 角色=%s",
+			 vehicle_id, _group_id, _role_manager.get_role_name());
+
 		return true;
 	}
 
@@ -114,14 +123,13 @@ bool Swarm_Node::swarm_node_init()
 /**
  * @brief 更新主机信息
  * @param selected_leader_id 选定的主机ID（0表示自动选择同组主机）
- * @return true: 主机信息有效，可以继续跟随; false: 主机信息无效
+ * @return true: 收到新的主机消息; false: 没有新消息
  */
 bool Swarm_Node::update_leader_info(int32_t selected_leader_id)
 {
 	if (!_uav_info_sub.updated()) {
-		// 没有新数据，检查现有数据是否有效
-		return _group_coordinator.has_valid_leader() ||
-		       (PX4_ISFINITE(_leader_sp_glo_pos.lat) && PX4_ISFINITE(_leader_sp_glo_pos.lon));
+		// 没有新数据
+		return false;
 	}
 
 	uav_info_s temp_info{};
@@ -129,8 +137,7 @@ bool Swarm_Node::update_leader_info(int32_t selected_leader_id)
 
 	// 跳过自己的消息
 	if (temp_info.mavid == (uint32_t)vehicle_id) {
-		return _group_coordinator.has_valid_leader() ||
-		       (PX4_ISFINITE(_leader_sp_glo_pos.lat) && PX4_ISFINITE(_leader_sp_glo_pos.lon));
+		return false;
 	}
 
 	// 使用组间协调器匹配同组主机（消息中已包含 group_id 和 is_leader）
@@ -156,7 +163,7 @@ bool Swarm_Node::update_leader_info(int32_t selected_leader_id)
 		}
 	}
 
-	return PX4_ISFINITE(_leader_sp_glo_pos.lat) && PX4_ISFINITE(_leader_sp_glo_pos.lon);
+	return false;
 }
 
 /**
@@ -642,9 +649,146 @@ void Swarm_Node::start_swarm_node()
 
 		_vehicle_local_position_sub.copy(&_vehicle_local_position);
 
-		// 更新主机信息
-		if (!update_leader_info(selected_leader_id)) {
-			// 没有找到主机，发送心跳保持OFFBOARD模式，悬停在当前位置
+		uint64_t now_debug = hrt_absolute_time();
+
+		// ========== 从机接收主机任务航点 ==========
+		// 只有在非独立模式下才接收任务更新（避免覆盖当前航点序号）
+		if (!_leader_lost_mode) {
+			bool received_new = _mission_sync.follower_receive_mission();
+			// 任务同步日志（每5秒输出一次）
+			static uint64_t last_sync_log = 0;
+			if (received_new && (now_debug - last_sync_log > 5000000)) {
+				PX4_INFO("[任务同步] 从机%d: 接收到航点更新, 当前共%d个航点",
+					 vehicle_id, _mission_sync.get_total_count());
+				last_sync_log = now_debug;
+			}
+		}
+
+		// 更新主机信息 - 返回是否收到新的主机消息
+		bool received_leader_msg = update_leader_info(selected_leader_id);
+
+		// 记录最后收到主机信息的时间（只有收到新消息时才更新）
+		if (received_leader_msg) {
+			_last_leader_timestamp = hrt_absolute_time();
+		}
+
+		// 判断是否有有效的主机位置数据
+		bool has_leader_position = PX4_ISFINITE(_leader_sp_glo_pos.lat) && PX4_ISFINITE(_leader_sp_glo_pos.lon);
+
+		// ========== 主机丢失检测 ==========
+		// 只有在曾经收到过主机信息的情况下才检测丢失
+		bool leader_lost = (_last_leader_timestamp > 0) && _mission_sync.is_leader_lost(_last_leader_timestamp);
+		bool has_valid_mission = _mission_sync.has_valid_mission();
+
+		// 调试日志（每5秒输出一次）
+		static uint64_t last_debug_log = 0;
+		if (now_debug - last_debug_log > 5000000) {
+			PX4_INFO("[从机状态] ID=%d: has_leader=%d, leader_lost=%d, has_mission=%d(%d个), last_ts=%.1fs前",
+				 vehicle_id, has_leader_position, leader_lost, has_valid_mission,
+				 _mission_sync.get_total_count(),
+				 _last_leader_timestamp > 0 ? (double)(now_debug - _last_leader_timestamp) / 1000000.0 : -1.0);
+			last_debug_log = now_debug;
+		}
+
+		// ========== 关键修复：主机丢失时执行独立任务 ==========
+		// 条件：主机信号丢失 且 有有效任务 且 任务未完成
+		if (leader_lost && has_valid_mission && !_mission_sync.is_mission_complete()) {
+			// 主机信号丢失，切换到独立任务模式
+			if (!_leader_lost_mode) {
+				_leader_lost_mode = true;
+				PX4_WARN("[主机丢失] 从机%d: 主机信号丢失超过3秒，切换到独立任务模式! 共%d个航点",
+					 vehicle_id, _mission_sync.get_total_count());
+			}
+
+			// 执行独立任务
+			matrix::Vector3f vehicle_own_position(_vehicle_local_position.x,
+							      _vehicle_local_position.y,
+							      _vehicle_local_position.z);
+
+			// 获取当前目标航点
+			matrix::Vector3f target_pos;
+			float target_yaw;
+			if (_mission_sync.get_current_waypoint(vehicle_own_position, _global_local_proj_ref,
+							       target_pos, target_yaw)) {
+				// 应用编队偏移
+				target_pos += _sp_offset;
+
+				// 计算到目标的距离（使用带偏移的目标位置）
+				matrix::Vector3f to_target = target_pos - vehicle_own_position;
+				float distance = to_target.norm();
+
+				// 检查是否到达当前航点（使用带偏移的目标位置判断）
+				if (distance < 5.0f) {
+					_mission_sync.force_advance_waypoint();
+					PX4_INFO("[独立任务] 从机%d: 到达航点，前进到下一个", vehicle_id);
+				}
+
+				// 计算飞向目标的速度
+				float max_speed = _param_max_formation_speed.get();
+				matrix::Vector3f target_vel(0.f, 0.f, 0.f);
+				if (distance > 1.0f) {
+					target_vel = to_target.normalized() * fminf(max_speed, distance);
+				}
+
+				// 使用当前航向或目标航向
+				float yaw = PX4_ISFINITE(target_yaw) ? target_yaw : _vehicle_local_position.heading;
+
+				// 发送控制指令
+				control_instance::getInstance()->Control_pos_vel_yaw(target_pos, target_vel, yaw, 0.f);
+
+				// 继续发布位置信息供其他飞机避撞
+				_sensor_gps_sub.copy(&_sensor_gps);
+				_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps,
+								   _group_id, _set_as_leader, false);
+
+				// 日志输出
+				static uint64_t last_independent_log = 0;
+				uint64_t now = hrt_absolute_time();
+				if (now - last_independent_log > 2000000) {
+					PX4_INFO("[独立任务] 从机%d: 正在飞往航点%d/%d, 距离%.1fm",
+						 vehicle_id, _mission_sync.get_current_seq() + 1,
+						 _mission_sync.get_total_count(), (double)distance);
+					last_independent_log = now;
+				}
+				return;  // 独立任务模式，不执行后续跟随逻辑
+			} else {
+				// 无法获取航点，悬停
+				PX4_WARN("[独立任务] 从机%d: 无法获取航点，悬停", vehicle_id);
+			}
+		}
+
+		// 主机信号恢复（收到新消息且之前在独立模式）
+		if (received_leader_msg && _leader_lost_mode) {
+			_leader_lost_mode = false;
+			_mission_sync.reset_mission_state();
+			PX4_INFO("[主机恢复] 从机%d: 主机信号恢复，切换回跟随模式", vehicle_id);
+		}
+
+		// 没有有效主机位置，且不在独立模式，悬停
+		if (!has_leader_position && !_leader_lost_mode) {
+			matrix::Vector3f current_pos(_vehicle_local_position.x,
+						     _vehicle_local_position.y,
+						     _vehicle_local_position.z);
+			matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
+			float current_yaw = _vehicle_local_position.heading;
+			control_instance::getInstance()->Control_pos_vel_yaw(current_pos, zero_vel, current_yaw, 0.f);
+
+			// 如果有任务但还没进入独立模式（可能还在等待超时）
+			if (has_valid_mission && _last_leader_timestamp > 0) {
+				static uint64_t last_waiting_log = 0;
+				uint64_t now = hrt_absolute_time();
+				if (now - last_waiting_log > 2000000) {
+					float time_since_leader = (float)(now - _last_leader_timestamp) / 1000000.0f;
+					PX4_INFO("[等待] 从机%d: 主机丢失%.1fs，等待超时(3s)后进入独立模式",
+						 vehicle_id, (double)time_since_leader);
+					last_waiting_log = now;
+				}
+			}
+			return;
+		}
+
+		// 主机丢失超时但还没进入独立模式，也悬停等待
+		if (leader_lost && !_leader_lost_mode && !has_valid_mission) {
 			matrix::Vector3f current_pos(_vehicle_local_position.x,
 						     _vehicle_local_position.y,
 						     _vehicle_local_position.z);
@@ -652,6 +796,12 @@ void Swarm_Node::start_swarm_node()
 			float current_yaw = _vehicle_local_position.heading;
 			control_instance::getInstance()->Control_pos_vel_yaw(current_pos, zero_vel, current_yaw, 0.f);
 			return;
+		}
+
+		// ========== 正常跟随模式 ==========
+		// 只有在没有丢失主机的情况下才跟随
+		if (leader_lost) {
+			return;  // 主机丢失，不执行跟随（应该已经在独立模式或悬停）
 		}
 
 		_sensor_gps_sub.copy(&_sensor_gps);
@@ -831,6 +981,7 @@ void Swarm_Node::handle_parameter_update()
 		set_swarm_info(_param_swarm_set_leader.get(), _param_swarm_group_id.get());
 		_role_manager.update(_set_as_leader, _group_id, 1);
 		_group_coordinator.set_self_info(vehicle_id, _group_id, _set_as_leader);
+		_mission_sync.update_role(_group_id, _set_as_leader);
 
 		if (_role_manager.role_changed()) {
 			_role_manager.clear_role_changed();
@@ -864,22 +1015,6 @@ void Swarm_Node::handle_parameter_update()
 			_leader_sp_glo_pos = uav_info_s{};
 			set_swarm_offset(Vector3f(_param_swarm_X_offset.get(), _param_swarm_Y_offset.get(), _param_swarm_Z_offset.get()));
 			_offset_initialized = false;
-			// 重置目标位置为当前位置，避免切换时飞向旧目标
-
-
-			_vehicle_local_position_sub.copy(&_vehicle_local_position);
-
-
-			_sp_position(0) = _vehicle_local_position.x;
-
-
-			_sp_position(1) = _vehicle_local_position.y;
-
-
-			_sp_position(2) = _vehicle_local_position.z;
-
-
-			_last_target_valid = false;
 
 			if (STATE == state::CONTROL) {
 				// 主机变从机：先Hold再OFFBOARD
@@ -1010,6 +1145,10 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 			}
 		}
 
+		// ========== 主机任务广播 ==========
+		// 主机在执行任务时，将航点信息广播给同组从机
+		_mission_sync.leader_broadcast_mission();
+
 		//  头号主机：只发布位置信息，不需要避撞
 		// 主机的控制完全由PX4的任务系统（AUTO模式）或用户手动控制
 
@@ -1091,7 +1230,13 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 		    _state.nav_state == vehicle_status_s::NAVIGATION_STATE_MANUAL ||
 		    _state.nav_state == vehicle_status_s::NAVIGATION_STATE_STAB ||
 		    _state.nav_state == vehicle_status_s::NAVIGATION_STATE_ACRO) {
-			PX4_WARN("Manual takeover detected, not switching back to OFFBOARD");
+			// 手动接管日志（每6秒输出一次）
+			static uint64_t last_takeover_log = 0;
+			uint64_t now = hrt_absolute_time();
+			if (now - last_takeover_log > 6000000) {
+				PX4_WARN("Manual takeover detected, not switching back to OFFBOARD");
+				last_takeover_log = now;
+			}
 			return;
 
 		} else if (_state.nav_state == vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION ||
@@ -1353,8 +1498,14 @@ bool Swarm_Node::uav_takeoff_altitude(matrix::Vector3f vehicle_own_position, mat
 		control_instance::getInstance()->Control_pos_vel_yaw(
 			_sp_position, _sp_vel, target_yaw, target_yawspeed);
 
-		PX4_INFO("Follower is climbing to %.2f meters... Current altitude: %.2f",
-			 (double)takeoff_altitude, (double)_vehicle_local_position.z);
+		// 爬升日志（每6秒输出一次）
+		static uint64_t last_climb_log = 0;
+		uint64_t now = hrt_absolute_time();
+		if (now - last_climb_log > 6000000) {
+			PX4_INFO("Follower is climbing to %.2f meters... Current altitude: %.2f",
+				 (double)takeoff_altitude, (double)_vehicle_local_position.z);
+			last_climb_log = now;
+		}
 		return true;
 	}
 	return false;

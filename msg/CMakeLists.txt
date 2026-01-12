@@ -275,6 +275,7 @@ set(msg_files
 	SwarmStartFlag.msg
 	LeaderId.msg
 	SwarmOperationAck.msg
+	SwarmMissionItem.msg
 	test_mavlink_tx.msg
 	test_mavlink_rx.msg
 )

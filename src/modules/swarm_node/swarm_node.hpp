@@ -11,7 +11,7 @@
 #include <px4_platform_common/events.h>
 #include <drivers/drv_hrt.h>
 #include <lib/perf/perf_counter.h>
-#include <geo/geo.h>
+#include <lib/geo/geo.h>
 #include <uORB/Publication.hpp>
 #include <uORB/Subscription.hpp>
 #include <uORB/SubscriptionCallback.hpp>
@@ -31,7 +31,7 @@
 #include "role_manager.hpp"
 #include "avoidance_filter.hpp"
 #include "group_coordinator.hpp"
-#include <lib/geo/geo.h>
+#include "mission_sync.hpp"
 
 #define M_PI_PRECISE	3.141592653589793238462643383279502884
 
@@ -188,6 +188,11 @@ private:
 	RoleManager _role_manager;              // 角色管理器
 	AvoidanceFilter _avoidance_filter;      // 避撞过滤器
 	GroupCoordinator _group_coordinator;    // 组间协调器
+	MissionSync _mission_sync;              // 任务同步模块
+
+	// 主机丢失检测
+	uint64_t _last_leader_timestamp{0};     // 最后收到主机位置的时间
+	bool _leader_lost_mode{false};          // 是否处于主机丢失模式
 
 	// 过滤后的避撞目标列表
 	OtherVehiclePosition _filtered_avoidance_targets[MAX_SWARM_SIZE];

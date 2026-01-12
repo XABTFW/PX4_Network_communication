@@ -155,6 +155,10 @@ MavlinkReceiver::handle_message(mavlink_message_t *msg)
 		handle_message_uav_info(msg);
 		break;
 
+	case MAVLINK_MSG_ID_SWARM_MISSION_ITEM:
+		handle_message_swarm_mission_item(msg);
+		break;
+
 	case MAVLINK_MSG_ID_COMMAND_LONG:
 		handle_message_command_long(msg);
 		break;
@@ -3648,6 +3652,34 @@ MavlinkReceiver::handle_message_uav_info(mavlink_message_t *msg)
 			_follower_info.at_target = (_uav_info_msg.land & 0x02) ? 1 : 0;
 			_follower_info_pub.publish(_follower_info);
 		}
+}
+
+void
+MavlinkReceiver::handle_message_swarm_mission_item(mavlink_message_t *msg)
+{
+	mavlink_swarm_mission_item_t mavlink_msg;
+	mavlink_msg_swarm_mission_item_decode(msg, &mavlink_msg);
+
+	swarm_mission_item_s item{};
+	item.timestamp = hrt_absolute_time();
+	item.group_id = mavlink_msg.group_id;
+	item.leader_id = mavlink_msg.leader_id;
+	item.mission_id = mavlink_msg.mission_id;
+	item.total_count = mavlink_msg.total_count;
+	item.current_seq = mavlink_msg.current_seq;
+	item.seq = mavlink_msg.seq;
+	item.nav_cmd = mavlink_msg.nav_cmd;
+	item.lat = mavlink_msg.lat;
+	item.lon = mavlink_msg.lon;
+	item.alt = mavlink_msg.alt;
+	item.yaw = mavlink_msg.yaw;
+	item.acceptance_radius = mavlink_msg.acceptance_radius;
+	item.loiter_radius = mavlink_msg.loiter_radius;
+	item.time_inside = mavlink_msg.time_inside;
+	item.autocontinue = (mavlink_msg.autocontinue == 1);
+	item.sync_type = mavlink_msg.sync_type;
+
+	_swarm_mission_item_pub.publish(item);
 }
 
 

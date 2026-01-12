@@ -13,4 +13,3 @@ uint8 OP_LEADER_CHANGE = 2
 # Result constants
 uint8 RESULT_SUCCESS = 0
 uint8 RESULT_FAILED = 1
-

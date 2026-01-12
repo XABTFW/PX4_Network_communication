@@ -9,7 +9,9 @@ px4_add_module(
 		role_manager.cpp
 		avoidance_filter.cpp
 		group_coordinator.cpp
+		mission_sync.cpp
 	DEPENDS
 		px4_work_queue
+		dataman_client
 	)
 
