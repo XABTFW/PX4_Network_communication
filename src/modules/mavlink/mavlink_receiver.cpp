@@ -3546,15 +3546,30 @@ MavlinkReceiver::handle_message_swarm_start_flag(mavlink_message_t *msg){
 	_group_id_sub.copy(&_group_id);
 	swarm_start_flag_s _swarm_start_flag{};
 
+	mavlink_swarm_start_flag_t _swarm_start_flag_msg{};
+	mavlink_msg_swarm_start_flag_decode(msg, &_swarm_start_flag_msg);
 
-	PX4_INFO("从机：msg->sysid is %u", (unsigned int)msg->sysid);
-	PX4_INFO("从机：msg->compid is %u", (unsigned int)msg->compid);
+	// start_swarm 字段现在用于传递目标组号 (1-4)
+	// 0 表示发送给所有组，1-4 表示发送给指定组
+	uint8_t target_group = _swarm_start_flag_msg.start_swarm;
+	uint32_t my_group = _group_id.group_id;
 
-	//这个55还发不发，需要和地面站进行相互确认
+	PX4_INFO("收到集群命令: 目标组=%u, 本机组=%u, 起飞=%u, 降落=%u, 暂停=%u, 继续=%u",
+		(unsigned)target_group, (unsigned)my_group,
+		(unsigned)_swarm_start_flag_msg.start_swarm_auto,
+		(unsigned)_swarm_start_flag_msg.stop_swarm,
+		(unsigned)_swarm_start_flag_msg.Pause_swarm,
+		(unsigned)_swarm_start_flag_msg.continue_swarm);
+
+	// 组号过滤：target_group=0 表示所有组，否则只有匹配的组才执行
+	if (target_group != 0 && target_group != my_group) {
+		PX4_INFO("组号不匹配，忽略命令 (目标组=%u, 本机组=%u)", (unsigned)target_group, (unsigned)my_group);
+		return;
+	}
+
+	// 组号匹配，执行命令
 	if(_group_id.leader == 0){
-	//if((_group_id.leader == 0) && (msg->sysid == 55) && (msg->compid == 55)){
-		mavlink_swarm_start_flag_t _swarm_start_flag_msg{};
-		mavlink_msg_swarm_start_flag_decode(msg, &_swarm_start_flag_msg);
+		// 从机
 		_swarm_start_flag.timestamp = hrt_absolute_time();
 		_swarm_start_flag.start_swarm = _swarm_start_flag_msg.start_swarm;
 		_swarm_start_flag.start_swarm_auto = _swarm_start_flag_msg.start_swarm_auto;
@@ -3562,24 +3577,19 @@ MavlinkReceiver::handle_message_swarm_start_flag(mavlink_message_t *msg){
 		_swarm_start_flag.pause_swarm = _swarm_start_flag_msg.Pause_swarm;
 		_swarm_start_flag.continue_swarm = _swarm_start_flag_msg.continue_swarm;
 		_swarm_start_flag_pub.publish(_swarm_start_flag);
-
-
+		PX4_INFO("从机执行命令");
 	}
-
 	else if(_group_id.leader == 1) {
-    //else if(_group_id.leader == 1 && (msg->sysid == 55) && (msg->compid == 55)){
-		mavlink_swarm_start_flag_t _swarm_start_flag_msg{};
-		mavlink_msg_swarm_start_flag_decode(msg, &_swarm_start_flag_msg);
+		// 主机
 		_swarm_start_flag.timestamp = hrt_absolute_time();
 		_swarm_start_flag.start_swarm = _swarm_start_flag_msg.start_swarm;
 		_swarm_start_flag.start_swarm_auto = _swarm_start_flag_msg.start_swarm_auto;
 		_swarm_start_flag.stop_swarm = _swarm_start_flag_msg.stop_swarm;
 		_swarm_start_flag.pause_swarm = _swarm_start_flag_msg.Pause_swarm;
-		_swarm_start_flag.continue_swarm= _swarm_start_flag_msg.continue_swarm;
-
+		_swarm_start_flag.continue_swarm = _swarm_start_flag_msg.continue_swarm;
 		_swarm_start_flag_pub.publish(_swarm_start_flag);
+		PX4_INFO("主机执行命令");
 	}
-
 }
 
 
