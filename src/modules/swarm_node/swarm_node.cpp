@@ -1061,6 +1061,8 @@ void Swarm_Node::handle_arm_auto_state()
 {
 	if (control_instance::getInstance()->Change_Auto() && control_instance::getInstance()->Arm_vehicle()) {
 		STATE = state::CONTROL;
+		// 发送ACK：起飞命令执行成功
+		publish_operation_ack(swarm_operation_ack_s::OP_TAKEOFF, 0, _group_id, true);
 	} else {
 		STATE = state::IDLE;
 	}
@@ -1071,6 +1073,8 @@ void Swarm_Node::handle_arm_leader_state()
 {
 	if (control_instance::getInstance()->Change_position_mode() && control_instance::getInstance()->Arm_vehicle()) {
 		STATE = state::CONTROL;
+		// 发送ACK：起飞命令执行成功
+		publish_operation_ack(swarm_operation_ack_s::OP_TAKEOFF, 0, _group_id, true);
 	} else {
 		STATE = state::IDLE;
 	}
@@ -1081,6 +1085,8 @@ void Swarm_Node::handle_arm_offboard_state()
 {
 	if (control_instance::getInstance()->Change_offborad() && control_instance::getInstance()->Arm_vehicle()) {
 		STATE = state::CONTROL;
+		// 发送ACK：起飞命令执行成功（从机）
+		publish_operation_ack(swarm_operation_ack_s::OP_TAKEOFF, 0, _group_id, true);
 		PX4_INFO("STATE = state::ARM_OFFBOARD;->state::CONTROL;");
 	} else {
 		STATE = state::IDLE;
@@ -1287,8 +1293,14 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 	}
 
 	//  6. 暂停/继续集群控制
+	static bool pause_ack_sent = false;  // 移到外层，跟踪暂停ACK是否已发送
+	
 	if (_swarm_start_flag.continue_swarm == 1) {
 		PX4_INFO("[继续] 飞机%d 收到继续指令，恢复任务执行", vehicle_id);
+
+		// 发送ACK：继续命令执行成功
+		publish_operation_ack(swarm_operation_ack_s::OP_CONTINUE, 0, _group_id, true);
+		pause_ack_sent = false;  // 重置暂停ACK标志
 
 		// 清除暂停和继续标志
 		swarm_start_flag_s clear_flag = _swarm_start_flag;
@@ -1315,6 +1327,12 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 			_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps,
 							   _group_id, _set_as_leader, true);
 
+			// 只在第一次进入暂停状态时发送ACK
+			if (!pause_ack_sent) {
+				publish_operation_ack(swarm_operation_ack_s::OP_PAUSE, 0, _group_id, true);
+				pause_ack_sent = true;
+			}
+
 			static uint64_t last_pause_log = 0;
 			uint64_t now = hrt_absolute_time();
 			if (now - last_pause_log > 2000000) {  // 每2秒打印一次
@@ -1322,6 +1340,9 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 				last_pause_log = now;
 			}
 			return;
+	} else {
+		// 不在暂停状态，重置ACK标志
+		pause_ack_sent = false;
 	}
 
 	//  7. 从机执行跟随控制逻辑
@@ -1337,6 +1358,8 @@ void Swarm_Node::handle_control_state(vehicle_status_s _state, uav_info_s _uav_i
 	//  9. 主动触发 LAND
 	if (_swarm_start_flag.stop_swarm == 1 || _uav_info.land == 1) {
 		PX4_WARN("Swarm termination triggered, landing...");
+		// 发送ACK：降落命令执行
+		publish_operation_ack(swarm_operation_ack_s::OP_LAND, 0, _group_id, true);
 		STATE = state::LAND;
 		return;
 	}
