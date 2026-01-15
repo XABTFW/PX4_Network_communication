@@ -193,6 +193,7 @@ private:
 	// 主机丢失检测
 	uint64_t _last_leader_timestamp{0};     // 最后收到主机位置的时间
 	bool _leader_lost_mode{false};          // 是否处于主机丢失模式
+	uint16_t _independent_start_seq{0};     // 进入独立模式时的航点序号
 
 	// 过滤后的避撞目标列表
 	OtherVehiclePosition _filtered_avoidance_targets[MAX_SWARM_SIZE];

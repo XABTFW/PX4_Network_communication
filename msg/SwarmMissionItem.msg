@@ -25,3 +25,6 @@ uint8 SYNC_SINGLE = 0
 uint8 SYNC_START = 1
 uint8 SYNC_END = 2
 uint8 SYNC_CLEAR = 3
+
+# 转发标记
+bool is_relay             # 是否为从机转发的消息（用于主机丢失后从机间同步航点）

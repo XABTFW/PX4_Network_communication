@@ -110,8 +110,6 @@ bool MissionSync::leader_broadcast_mission()
 
 	uint64_t now = hrt_absolute_time();
 
-
-
 	// 检查是否需要加载/更新任务
 	mission_s mission{};
 	if (_mission_sub.copy(&mission)) {
@@ -142,29 +140,30 @@ bool MissionSync::leader_broadcast_mission()
 		}
 	}
 
-	// 正在广播中，继续发送航点
+	// 正在广播中，继续发送航点（每次发送多个，加快同步速度）
 	if (_broadcast_in_progress && _mission_valid) {
 		if (now - _last_broadcast_time >= MISSION_SYNC_INTERVAL_US) {
-			if (_broadcast_seq < _total_count) {
+			// 每次发送最多3个航点
+			for (int i = 0; i < 3 && _broadcast_seq < _total_count; i++) {
 				send_waypoint(_broadcast_seq, swarm_mission_item_s::SYNC_SINGLE);
 				_broadcast_seq++;
-				_last_broadcast_time = now;
-
-				if (_broadcast_seq >= _total_count) {
-					// 发送任务结束标记
-					send_waypoint(_total_count - 1, swarm_mission_item_s::SYNC_END);
-					_broadcast_in_progress = false;
-
-					PX4_INFO("[MissionSync] 主机%d: 任务广播完成", _vehicle_id);
-				}
-				return true;
 			}
+			_last_broadcast_time = now;
+
+			if (_broadcast_seq >= _total_count) {
+				// 发送任务结束标记
+				send_waypoint(_total_count - 1, swarm_mission_item_s::SYNC_END);
+				_broadcast_in_progress = false;
+
+				PX4_INFO("[MissionSync] 主机%d: 任务广播完成", _vehicle_id);
+			}
+			return true;
 		}
 	}
 
 	// 周期性发送所有航点（轮流发送，确保从机收到完整任务）
 	if (_mission_valid && !_broadcast_in_progress) {
-		if (now - _last_broadcast_time >= MISSION_SYNC_INTERVAL_US * 2) {
+		if (now - _last_broadcast_time >= MISSION_SYNC_INTERVAL_US) {
 			// 获取主机当前执行的航点序号
 			mission_s current_mission{};
 			if (_mission_sub.copy(&current_mission) && current_mission.current_seq >= 0) {
@@ -177,14 +176,68 @@ bool MissionSync::leader_broadcast_mission()
 				}
 			}
 
-			// 轮流发送所有航点，确保从机能收到完整任务
-			uint16_t wp_to_send = _round_robin_idx % _total_count;
-			send_waypoint(wp_to_send, swarm_mission_item_s::SYNC_SINGLE);
-			_round_robin_idx++;
+			// 每次发送2个航点，加快同步速度
+			for (int i = 0; i < 2; i++) {
+				uint16_t wp_to_send = _round_robin_idx % _total_count;
+				send_waypoint(wp_to_send, swarm_mission_item_s::SYNC_SINGLE);
+				_round_robin_idx++;
+			}
 
 			_last_broadcast_time = now;
 			return true;
 		}
+	}
+
+	return false;
+}
+
+bool MissionSync::follower_relay_mission()
+{
+	// 从机在主机丢失后，将已存储的航点转发给同组其他从机
+	// 这样当次要主机丢失时，组内从机也能收到航点信息
+	if (_is_leader || !_initialized || !_mission_valid || _total_count == 0) {
+		return false;
+	}
+
+	uint64_t now = hrt_absolute_time();
+
+	// 周期性转发航点
+	if (now - _last_relay_time >= MISSION_SYNC_INTERVAL_US * 2) {
+		// 每次转发2个航点，加快同步速度
+		for (int i = 0; i < 2; i++) {
+			uint16_t wp_to_relay = _relay_round_robin_idx % _total_count;
+
+			if (_waypoints[wp_to_relay].valid) {
+				// 构造转发消息，标记为从机转发
+				swarm_mission_item_s msg{};
+				msg.timestamp = now;
+				msg.group_id = _group_id;
+				msg.leader_id = _vehicle_id;  // 使用从机自己的ID
+				msg.mission_id = _mission_id;
+				msg.total_count = _total_count;
+				msg.current_seq = _current_seq;
+				msg.sync_type = swarm_mission_item_s::SYNC_SINGLE;
+				msg.is_relay = true;  // 标记为转发消息
+
+				const StoredWaypoint &wp = _waypoints[wp_to_relay];
+				msg.seq = wp_to_relay;
+				msg.nav_cmd = wp.nav_cmd;
+				msg.lat = wp.lat;
+				msg.lon = wp.lon;
+				msg.alt = wp.alt;
+				msg.yaw = wp.yaw;
+				msg.acceptance_radius = wp.acceptance_radius;
+				msg.loiter_radius = wp.loiter_radius;
+				msg.time_inside = wp.time_inside;
+				msg.autocontinue = wp.autocontinue;
+
+				_mission_item_pub.publish(msg);
+			}
+
+			_relay_round_robin_idx++;
+		}
+		_last_relay_time = now;
+		return true;
 	}
 
 	return false;
@@ -204,6 +257,7 @@ void MissionSync::send_waypoint(uint16_t idx, uint8_t sync_type)
 	msg.total_count = _total_count;
 	msg.current_seq = _current_seq;
 	msg.sync_type = sync_type;
+	msg.is_relay = false;  // 主机发送的消息，不是转发
 
 	if (sync_type != swarm_mission_item_s::SYNC_CLEAR && idx < _total_count) {
 		const StoredWaypoint &wp = _waypoints[idx];  // idx 是数组索引
@@ -232,8 +286,13 @@ bool MissionSync::follower_receive_mission()
 	bool received_new = false;
 
 	while (_mission_item_sub.update(&item)) {
-		// 只接收同组主机的消息
+		// 只接收同组的消息
 		if (item.group_id != _group_id) {
+			continue;
+		}
+
+		// 跳过自己发送的转发消息
+		if (item.is_relay && item.leader_id == _vehicle_id) {
 			continue;
 		}
 
@@ -241,8 +300,8 @@ bool MissionSync::follower_receive_mission()
 
 		switch (item.sync_type) {
 		case swarm_mission_item_s::SYNC_START:
-			// 新任务开始
-			if (item.mission_id != _receiving_mission_id) {
+			// 新任务开始（只接受主机发送的开始标记，不接受转发的）
+			if (!item.is_relay && item.mission_id != _receiving_mission_id) {
 				_receiving_mission_id = item.mission_id;
 				_received_count = 0;
 				_total_count = item.total_count;
@@ -260,12 +319,14 @@ bool MissionSync::follower_receive_mission()
 			break;
 
 		case swarm_mission_item_s::SYNC_SINGLE:
-			// 存储航点
+			// 存储航点（接受主机发送的和从机转发的）
 			store_waypoint(item);
 			received_new = true;
 
-			// 更新主机当前航点
-			_current_seq = item.current_seq;
+			// 更新主机当前航点（只从主机消息更新，不从转发消息更新）
+			if (!item.is_relay) {
+				_current_seq = item.current_seq;
+			}
 
 			// 更新任务信息
 			if (item.total_count > 0) {
@@ -279,30 +340,66 @@ bool MissionSync::follower_receive_mission()
 			break;
 
 		case swarm_mission_item_s::SYNC_END:
-			// 任务接收完成
-			store_waypoint(item);
-			if (_mission_id != item.mission_id) {
-				// 只在新任务完成时输出日志
-				_mission_id = item.mission_id;
-				_mission_valid = (_received_count > 0);
-				PX4_INFO("[MissionSync] 从机%d: 任务接收完成, 共%d个航点",
-					 _vehicle_id, _received_count);
-			} else {
-				_mission_valid = (_received_count > 0);
+			// 任务接收完成（只接受主机发送的结束标记）
+			if (!item.is_relay) {
+				store_waypoint(item);
+				if (_mission_id != item.mission_id) {
+					// 只在新任务完成时输出日志
+					_mission_id = item.mission_id;
+					_mission_valid = (_received_count > 0);
+					PX4_INFO("[MissionSync] 从机%d: 任务接收完成, 共%d个航点",
+						 _vehicle_id, _received_count);
+				} else {
+					_mission_valid = (_received_count > 0);
+				}
+				received_new = true;
 			}
-			received_new = true;
 			break;
 
 		case swarm_mission_item_s::SYNC_CLEAR:
-			// 清除任务
-			_mission_valid = false;
-			_total_count = 0;
-			_received_count = 0;
-			for (int i = 0; i < MAX_MISSION_ITEMS; i++) {
-				_waypoints[i].valid = false;
+			// 清除任务（只接受主机发送的清除标记）
+			if (!item.is_relay) {
+				_mission_valid = false;
+				_total_count = 0;
+				_received_count = 0;
+				for (int i = 0; i < MAX_MISSION_ITEMS; i++) {
+					_waypoints[i].valid = false;
+				}
+				PX4_INFO("[MissionSync] 从机%d: 任务已清除", _vehicle_id);
 			}
-			PX4_INFO("[MissionSync] 从机%d: 任务已清除", _vehicle_id);
 			break;
+		}
+	}
+
+	return received_new;
+}
+
+bool MissionSync::follower_receive_waypoints_only()
+{
+	// 独立模式下只接收航点数据，不更新_current_seq
+	// 用于补充可能丢失的航点
+	if (_is_leader || !_initialized) {
+		return false;
+	}
+
+	swarm_mission_item_s item{};
+	bool received_new = false;
+
+	while (_mission_item_sub.update(&item)) {
+		// 只接收同组的消息
+		if (item.group_id != _group_id) {
+			continue;
+		}
+
+		// 跳过自己发送的转发消息
+		if (item.is_relay && item.leader_id == _vehicle_id) {
+			continue;
+		}
+
+		// 只处理单个航点消息，忽略START/END/CLEAR
+		if (item.sync_type == swarm_mission_item_s::SYNC_SINGLE) {
+			store_waypoint(item);
+			received_new = true;
 		}
 	}
 

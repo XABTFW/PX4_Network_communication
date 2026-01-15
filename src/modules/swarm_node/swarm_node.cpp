@@ -696,9 +696,18 @@ void Swarm_Node::start_swarm_node()
 			// 主机信号丢失，切换到独立任务模式
 			if (!_leader_lost_mode) {
 				_leader_lost_mode = true;
-				PX4_WARN("[主机丢失] 从机%d: 主机信号丢失超过3秒，切换到独立任务模式! 共%d个航点",
-					 vehicle_id, _mission_sync.get_total_count());
+				// 保存进入独立模式时的航点序号
+				_independent_start_seq = _mission_sync.get_current_seq();
+				PX4_WARN("[主机丢失] 从机%d: 主机信号丢失超过3秒，切换到独立任务模式! 从航点%d开始，共%d个航点",
+					 vehicle_id, _independent_start_seq, _mission_sync.get_total_count());
 			}
+
+			// ========== 主机丢失后转发航点给同组其他从机 ==========
+			// 这样当次要主机丢失时，组内其他从机也能收到航点信息
+			_mission_sync.follower_relay_mission();
+
+			// 独立模式下只接收航点数据，不更新_current_seq（避免被重置）
+			_mission_sync.follower_receive_waypoints_only();
 
 			// 执行独立任务
 			matrix::Vector3f vehicle_own_position(_vehicle_local_position.x,
@@ -713,21 +722,30 @@ void Swarm_Node::start_swarm_node()
 				// 应用编队偏移
 				target_pos += _sp_offset;
 
-				// 计算到目标的距离（使用带偏移的目标位置）
-				matrix::Vector3f to_target = target_pos - vehicle_own_position;
-				float distance = to_target.norm();
+				// 检查是否设置了绝对高度
+				float abs_alt = _param_swarm_abs_alt.get();
+				if (abs_alt > 0.1f) {
+					// 使用绝对高度覆盖Z坐标（NED坐标系，向下为正，所以取负值）
+					target_pos(2) = -abs_alt;
+				}
 
-				// 检查是否到达当前航点（使用带偏移的目标位置判断）
-				if (distance < 5.0f) {
+				// 计算到目标的水平距离（不包含高度，避免因高度差导致无法到达）
+				float dx = target_pos(0) - vehicle_own_position(0);
+				float dy = target_pos(1) - vehicle_own_position(1);
+				float distance_xy = sqrtf(dx * dx + dy * dy);
+
+				// 检查是否到达当前航点（使用水平距离判断）
+				if (distance_xy < 5.0f) {
 					_mission_sync.force_advance_waypoint();
 					PX4_INFO("[独立任务] 从机%d: 到达航点，前进到下一个", vehicle_id);
 				}
 
 				// 计算飞向目标的速度
 				float max_speed = _param_max_formation_speed.get();
+				matrix::Vector3f to_target = target_pos - vehicle_own_position;
 				matrix::Vector3f target_vel(0.f, 0.f, 0.f);
-				if (distance > 1.0f) {
-					target_vel = to_target.normalized() * fminf(max_speed, distance);
+				if (distance_xy > 1.0f) {
+					target_vel = to_target.normalized() * fminf(max_speed, distance_xy);
 				}
 
 				// 使用当前航向或目标航向
@@ -745,16 +763,48 @@ void Swarm_Node::start_swarm_node()
 				static uint64_t last_independent_log = 0;
 				uint64_t now = hrt_absolute_time();
 				if (now - last_independent_log > 2000000) {
-					PX4_INFO("[独立任务] 从机%d: 正在飞往航点%d/%d, 距离%.1fm",
+					PX4_INFO("[独立任务] 从机%d: 正在飞往航点%d/%d, 距离%.1fm (含偏移量)",
 						 vehicle_id, _mission_sync.get_current_seq() + 1,
-						 _mission_sync.get_total_count(), (double)distance);
+						 _mission_sync.get_total_count(), (double)distance_xy);
 					last_independent_log = now;
 				}
 				return;  // 独立任务模式，不执行后续跟随逻辑
 			} else {
-				// 无法获取航点，悬停
-				PX4_WARN("[独立任务] 从机%d: 无法获取航点，悬停", vehicle_id);
+				// 任务完成或无法获取航点，在当前位置悬停
+				matrix::Vector3f current_pos(vehicle_own_position);
+				matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
+				float current_yaw = _vehicle_local_position.heading;
+				control_instance::getInstance()->Control_pos_vel_yaw(current_pos, zero_vel, current_yaw, 0.f);
+
+				// 继续发布位置信息
+				_sensor_gps_sub.copy(&_sensor_gps);
+				_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps,
+								   _group_id, _set_as_leader, true);
+
+				static uint64_t last_complete_log = 0;
+				uint64_t now = hrt_absolute_time();
+				if (now - last_complete_log > 5000000) {
+					PX4_INFO("[独立任务完成] 从机%d: 任务完成，悬停中", vehicle_id);
+					last_complete_log = now;
+				}
+				return;
 			}
+		}
+
+		// 任务已完成但仍在独立模式，继续悬停
+		if (_leader_lost_mode && _mission_sync.is_mission_complete()) {
+			matrix::Vector3f current_pos(_vehicle_local_position.x,
+						     _vehicle_local_position.y,
+						     _vehicle_local_position.z);
+			matrix::Vector3f zero_vel(0.f, 0.f, 0.f);
+			float current_yaw = _vehicle_local_position.heading;
+			control_instance::getInstance()->Control_pos_vel_yaw(current_pos, zero_vel, current_yaw, 0.f);
+
+			// 继续发布位置信息
+			_sensor_gps_sub.copy(&_sensor_gps);
+			_position_sharing.publish_position(vehicle_id, _vehicle_local_position, _sensor_gps,
+							   _group_id, _set_as_leader, true);
+			return;
 		}
 
 		// 主机信号恢复（收到新消息且之前在独立模式）

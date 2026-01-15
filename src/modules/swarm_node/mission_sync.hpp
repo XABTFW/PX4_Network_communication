@@ -23,8 +23,8 @@ static constexpr int MAX_MISSION_ITEMS = 50;
 // 主机信号丢失超时时间 (微秒)
 static constexpr uint64_t LEADER_LOST_TIMEOUT_US = 3000000;  // 3秒
 
-// 任务同步间隔 (微秒)
-static constexpr uint64_t MISSION_SYNC_INTERVAL_US = 500000;  // 0.5秒
+// 任务同步间隔 (微秒) - 加快广播频率
+static constexpr uint64_t MISSION_SYNC_INTERVAL_US = 100000;  // 0.1秒（原来0.5秒太慢）
 
 /**
  * @brief 存储的航点信息
@@ -71,10 +71,22 @@ public:
 	bool leader_broadcast_mission();
 
 	/**
+	 * @brief 从机：在主机丢失后转发已存储的航点给同组其他从机
+	 * @return true 如果有航点被转发
+	 */
+	bool follower_relay_mission();
+
+	/**
 	 * @brief 从机：接收并存储主机发来的航点
 	 * @return true 如果接收到新航点
 	 */
 	bool follower_receive_mission();
+
+	/**
+	 * @brief 从机：独立模式下只接收航点数据，不更新_current_seq
+	 * @return true 如果接收到新航点
+	 */
+	bool follower_receive_waypoints_only();
 
 	/**
 	 * @brief 检查主机信号是否丢失
@@ -178,6 +190,10 @@ private:
 	uint32_t _receiving_mission_id{0};
 	uint16_t _received_count{0};
 	uint64_t _last_receive_time{0};
+
+	// 从机：转发状态（用于主机丢失后转发航点给同组其他从机）
+	uint64_t _last_relay_time{0};
+	uint16_t _relay_round_robin_idx{0};
 
 	// Dataman 客户端 (主机读取任务)
 	DatamanClient _dataman_client{};
