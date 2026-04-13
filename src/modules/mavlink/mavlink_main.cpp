@@ -1414,11 +1414,14 @@ Mavlink::configure_streams_to_default(const char *configure_single_stream)
 
 	const float unlimited_rate = -1.0f;
 
-	configure_stream_local("UAV_INFO",unlimited_rate);
-	configure_stream_local("LEADER_ID",unlimited_rate);
-	configure_stream_local("SWARM_OPERATION_ACK", unlimited_rate);
-	configure_stream_local("SWARM_MISSION_ITEM", unlimited_rate);
-	configure_stream_local("TEST_MAVLINK", unlimited_rate);
+	// 修复实机断联问题：限制集群消息发送频率，避免数传带宽拥塞
+	// UAV_INFO: 5Hz足够用于编队跟随和避撞（实机测试验证）
+	// 仿真环境可以提高到10-20Hz以获得更平滑的跟随效果
+	configure_stream_local("UAV_INFO", 10.0f);  // 实机：5Hz，仿真可改为20.0f
+	configure_stream_local("LEADER_ID", 1.0f);  // 主机ID变化不频繁，1Hz足够
+	configure_stream_local("SWARM_OPERATION_ACK", 10.0f);  // 操作确认，10Hz
+	configure_stream_local("SWARM_MISSION_ITEM", 5.0f);  // 任务航点，5Hz
+	configure_stream_local("TEST_MAVLINK", 10.0f);  // 测试消息，10Hz
 
 	switch (_mode) {
 	case MAVLINK_MODE_NORMAL:

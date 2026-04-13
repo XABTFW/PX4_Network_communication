@@ -36,8 +36,12 @@
 BatterySimulator::BatterySimulator() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::hp_default),
-	_battery(1, this, BATTERY_SIMLATOR_SAMPLE_INTERVAL_US, battery_status_s::SOURCE_POWER_MODULE)
+	_battery(1, this, BATTERY_SIMLATOR_SAMPLE_INTERVAL_US, battery_status_s::SOURCE_POWER_MODULE),
+	_battery_percentage(1.f)
 {
+	// Initialize battery percentage to 100% for all instances
+	// Each instance maintains its own independent battery state
+	_battery_percentage = 1.0f;
 }
 
 BatterySimulator::~BatterySimulator()

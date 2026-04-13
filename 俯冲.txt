@@ -1,0 +1,44 @@
+俯冲打击使用方法
+方式1：使用GPS坐标（推荐）
+
+# 1. 启动模块
+proportional_navigation start
+
+# 2. 配置俯冲角度（可选，默认-45度）
+param set PN_IMPACT_ANG_V -90.0    # 90度垂直俯冲
+param set PN_CONSTR_MODE 1         # 启用铅垂面约束
+
+# 3. 配置拉升参数（避免撞地）
+param set PN_ENABLE_PULLUP 1       # 启用拉升
+param set PN_PULLUP_DIST 5.0       # 距目标5米时拉升
+param set PN_PULLUP_ALT -30.0      # 拉升到30米高度
+
+# 4. 发送俯冲指令（GPS坐标）
+proportional_navigation ground_strike_gps <纬度> <经度> [目标高度] [起飞高度]
+
+# 示例：
+proportional_navigation ground_strike_gps 47.397742 8.545594 0 50
+
+# 5. 等待2秒后解锁并切换到Offboard模式
+commander arm
+commander mode offboard
+方式2：使用NED坐标
+
+# 1-3步同上
+
+# 4. 发送俯冲指令（NED坐标，相对home点）
+proportional_navigation ground_strike <x> <y> [z] [起飞高度]
+
+# 示例：俯冲到前方100米的地面目标
+proportional_navigation ground_strike 100 0 0 50
+
+# 5. 解锁并切换模式
+commander arm
+commander mode offboard
+关键参数说明
+纬度/经度：目标GPS坐标（度）
+x, y：目标NED坐标（米，x=北，y=东）
+目标高度：默认0（地面），可指定其他高度
+起飞高度：默认50米，俯冲需要足够高度
+速度限制
+现在地面俯冲打击模式已自动解除速度限制，飞机会以最大速度撞击目标（仅受加速度限制）。

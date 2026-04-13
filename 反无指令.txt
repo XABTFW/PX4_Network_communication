@@ -1,0 +1,48 @@
+make px4_sitl_default gz_fpv_quadtailsitter
+
+proportional_navigation start
+proportional_navigation engage_gps_takeoff 47.3977419 8.5455938 488.5 30.0
+proportional_navigation engage_gps_takeoff 47.3978 8.5456 488.5 20.0
+
+PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="0,2" PX4_SIM_MODEL=gz_fpv_quadtailsitter ./build/px4_sitl_default/bin/px4 -i 1
+PX4_SYS_AUTOSTART=4001 PX4_GZ_MODEL_POSE="0,4" PX4_SIM_MODEL=gz_fpv_quadtailsitter ./build/px4_sitl_default/bin/px4 -i 2
+
+proportional_navigation engage_gps_takeoff 47.398040 8.546170 30 20.0
+proportional_navigation engage_gps_takeoff 47.398047 8.546179 30 20.0
+commander mode offboard
+
+
+
+# 从地面起飞并打击GPS目标
+proportional_navigation engage_gps_takeoff 39.123456 116.654321 100
+
+# 打击运动目标（极坐标）
+proportional_navigation engage_polar 100 0 30 10 90
+# 100米距离，正北方向，30米高度，10m/s速度，向东飞行
+
+# 打击NED坐标目标（带速度）
+proportional_navigation engage 50 20 -30 5 0 0
+# 位置(50,20,-30)，速度(5,0,0) m/s
+
+         0° (北)
+             ↑
+         |
+270° ←---+---→ 90° (东)
+         |	
+             ↓
+        180° (南)	
+        make px4_sitl gz_x500
+
+# 2. 启动模块
+proportional_navigation start
+
+# 3. 执行打击（飞机会自动起飞）
+proportional_navigation engage_polar 40 0 30 10 0 30
+
+# 4. 观察状态
+proportional_navigation status	
+
+
+
+
+

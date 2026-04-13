@@ -1,0 +1,9 @@
+rc.board_sensors 
+# DM-IMU L1 CAN driver (达妙IMU)
+# 使用默认 CAN ID 0x10, 设备 /dev/can0
+# 如需修改参数，可以使用: dm_imu_l1 start -i 0x20 -d /dev/can1
+dm_imu_l1 start
+
+default.px4board
+CONFIG_DRIVERS_IMU_DM_IMU_L1=y
+

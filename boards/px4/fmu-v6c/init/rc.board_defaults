@@ -9,3 +9,18 @@ param set-default BAT2_V_DIV 18.1
 
 param set-default BAT1_A_PER_V 36.367515152
 param set-default BAT2_A_PER_V 36.367515152
+
+#
+# DJ_MK ASMG-MD Servo Driver
+#
+# 设置默认参数
+param set-default DJ_MK_ENABLE 0
+param set-default DJ_MK_SERVO_ID 1
+param set-default DJ_MK_SPEED 256
+
+# 如果启用了 DJ_MK 驱动，则启动它
+# 已禁用自启动，需要手动启动驱动
+#if param compare DJ_MK_ENABLE 1
+#then
+#	dj_mk start
+#fi

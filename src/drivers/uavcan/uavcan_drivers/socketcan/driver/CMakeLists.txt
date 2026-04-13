@@ -2,6 +2,7 @@ include_directories(
     ./include
     )
 
+# SocketCAN driver for CONFIG_NET_CAN
 add_compile_options(-Wno-unused-variable)
 add_library(uavcan_socketcan_driver STATIC
     src/socketcan.cpp

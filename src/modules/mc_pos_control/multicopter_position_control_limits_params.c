@@ -39,12 +39,12 @@
  *
  * @unit m/s
  * @min 0
- * @max 20
+ * @max 100
  * @decimal 1
  * @increment 1
  * @group Multicopter Position Control
  */
-PARAM_DEFINE_FLOAT(MPC_XY_VEL_MAX, 5.f);
+PARAM_DEFINE_FLOAT(MPC_XY_VEL_MAX, 100.f);
 
 /**
  * Maximum ascent velocity
@@ -56,12 +56,12 @@ PARAM_DEFINE_FLOAT(MPC_XY_VEL_MAX, 5.f);
  *
  * @unit m/s
  * @min 0.5
- * @max 8
+ * @max 50
  * @increment 0.1
  * @decimal 1
  * @group Multicopter Position Control
  */
-PARAM_DEFINE_FLOAT(MPC_Z_VEL_MAX_UP, 3.f);
+PARAM_DEFINE_FLOAT(MPC_Z_VEL_MAX_UP, 50.f);
 
 /**
  * Maximum descent velocity
@@ -73,12 +73,12 @@ PARAM_DEFINE_FLOAT(MPC_Z_VEL_MAX_UP, 3.f);
  *
  * @unit m/s
  * @min 0.5
- * @max 4
+ * @max 50
  * @increment 0.1
  * @decimal 1
  * @group Multicopter Position Control
  */
-PARAM_DEFINE_FLOAT(MPC_Z_VEL_MAX_DN, 1.5f);
+PARAM_DEFINE_FLOAT(MPC_Z_VEL_MAX_DN, 50.f);
 
 /**
  * Maximum tilt angle in air

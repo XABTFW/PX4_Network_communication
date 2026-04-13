@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "user-persistent-chat": {
+      "command": "node",
+      "args": [
+        "/home/btfw/.cursor-loop/bridge.js"
+      ],
+      "disabled": false,
+      "autoApprove": [
+        "wait_for_user_input"
+      ]
+    }
+  }
+}

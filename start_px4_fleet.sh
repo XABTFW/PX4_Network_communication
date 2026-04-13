@@ -10,6 +10,12 @@ if [ ! -f "./build/px4_sitl_default/bin/px4" ]; then
     exit 1
 fi
 
+# 清理可能残留的端口占用
+echo "清理残留进程..."
+pkill -9 px4 2>/dev/null
+pkill -9 gz 2>/dev/null
+sleep 2
+
 # 设置Gazebo只启动一个窗口（通过环境变量）
 export PX4_GZ_WORLD=default
 export GZ_SIM_RESOURCE_PATH=${GZ_SIM_RESOURCE_PATH}
@@ -27,12 +33,29 @@ start_instance() {
     PX4_SYS_AUTOSTART=4001 \
     PX4_GZ_MODEL_POSE="$pose" \
     PX4_SIM_MODEL=gz_x500 \
-    ./build/px4_sitl_default/bin/px4 -i "$instance_id" &
+    ./build/px4_sitl_default/bin/px4 -i "$instance_id" > /dev/null 2>&1 &
 
     PIDS+=($!)
 
-    # 延迟8秒，让传感器有足够时间校准稳定
-    sleep 8
+    # 等待MAVLink端口就绪
+    local mavlink_port=$((18570 + instance_id))
+    local timeout=15
+    local elapsed=0
+    
+    echo -n "  等待实例 $instance_id MAVLink端口 $mavlink_port 就绪..."
+    while [ $elapsed -lt $timeout ]; do
+        if netstat -tuln 2>/dev/null | grep -q ":$mavlink_port " || ss -tuln 2>/dev/null | grep -q ":$mavlink_port "; then
+            echo " 完成 (${elapsed}秒)"
+            sleep 3  # 额外等待传感器校准
+            return 0
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+        echo -n "."
+    done
+    
+    echo " 超时！"
+    return 1
 }
 
 # 启动所有10个实例

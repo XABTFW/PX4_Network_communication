@@ -1,0 +1,5 @@
+menuconfig MODULES_PROPORTIONAL_NAVIGATION
+	bool "proportional_navigation"
+	default n
+	---help---
+		Enable support for proportional navigation guidance

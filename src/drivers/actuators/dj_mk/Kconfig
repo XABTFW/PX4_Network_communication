@@ -1,0 +1,5 @@
+menuconfig DRIVERS_ACTUATORS_DJ_MK
+	bool "dj_mk"
+	default n
+	---help---
+		Enable support for ASMG-MD series servo control via CAN bus

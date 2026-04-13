@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+# @name DM-IMU L1 Test Configuration
+# @type Quadrotor
+#
+
+. ${R}etc/init.d/rc.mc_defaults
+
+# 启动Cyphal以初始化CAN总线
+param set CYPHAL_ENABLE 1
+
+# 设置DM-IMU参数（如果需要）
+# param set DM_IMU_CAN_ID 16  # 0x10

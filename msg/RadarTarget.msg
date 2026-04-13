@@ -1,0 +1,12 @@
+uint64 timestamp
+uint8 target_id
+float32 x
+float32 y
+float32 z
+float32 vx
+float32 vy
+float32 vz
+float32 range
+float32 azimuth
+float32 elevation
+bool valid

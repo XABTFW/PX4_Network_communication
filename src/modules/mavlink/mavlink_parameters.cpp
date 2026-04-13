@@ -319,7 +319,7 @@ MavlinkParametersManager::send()
 	int max_num_to_send;
 
 	if (_mavlink.get_protocol() == Protocol::SERIAL && !_mavlink.is_usb_uart()) {
-		max_num_to_send = 3;
+		max_num_to_send = 10;
 
 	} else {
 		// speed up parameter loading via UDP or USB: try to send 20 at once

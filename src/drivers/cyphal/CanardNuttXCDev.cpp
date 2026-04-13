@@ -49,6 +49,7 @@ int CanardNuttXCDev::init()
 
 	if (can == nullptr) {
 		PX4_ERR("Failed to get CAN interface");
+		return -1;
 
 	} else {
 		/* Register the CAN driver at "/dev/can0" */
@@ -56,9 +57,17 @@ int CanardNuttXCDev::init()
 
 		if (ret < 0) {
 			PX4_ERR("can_register failed: %d", ret);
+			return -1;
 
 		} else {
 			_fd = ::open("/dev/can0", O_RDWR | O_NONBLOCK);
+
+			if (_fd < 0) {
+				PX4_ERR("Failed to open /dev/can0: %d", errno);
+				return -1;
+			}
+
+			PX4_INFO("CAN interface initialized successfully, /dev/can0 ready");
 		}
 	}
 

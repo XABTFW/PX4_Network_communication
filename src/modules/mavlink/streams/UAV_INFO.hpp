@@ -37,6 +37,7 @@
 #include <uORB/topics/trajectory_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/sensor_gps.h>
+#include <uORB/topics/home_position.h>
 #include <lib/geo/geo.h>
 #include <drivers/drv_hrt.h>
 
@@ -57,12 +58,18 @@ public:
 	}
 
 private:
-	explicit MavlinkStreamUavInfo(Mavlink *mavlink) : MavlinkStream(mavlink) {}
+	explicit MavlinkStreamUavInfo(Mavlink *mavlink) : MavlinkStream(mavlink)
+	{
+		// 缓存参数句柄，避免每次send()都调用param_find()
+		_param_leader = param_find("SWARM_SET_LEADER");
+		_param_group = param_find("SWARM_GROUP_ID");
+	}
 
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _trajectory_sub{ORB_ID(trajectory_setpoint)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _gps_sub{ORB_ID(sensor_gps)};
+	uORB::Subscription _home_position_sub{ORB_ID(home_position)};
 
 	MapProjection _global_local_proj_ref{};
 	double _ref_lat{0.0};
@@ -71,21 +78,23 @@ private:
 	// 用于判断是否为主机（每次都检查，支持动态切换）
 	bool _is_leader{false};
 
+	// 缓存参数句柄
+	param_t _param_leader{PARAM_INVALID};
+	param_t _param_group{PARAM_INVALID};
+
 	bool send() override
 	{
 		// 每次都检查是否为主机，支持 QGC 动态切换主机
 		int32_t swarm_set_leader = 0;
-		param_t param_leader = param_find("SWARM_SET_LEADER");
-		if (param_leader != PARAM_INVALID) {
-			param_get(param_leader, &swarm_set_leader);
+		if (_param_leader != PARAM_INVALID) {
+			param_get(_param_leader, &swarm_set_leader);
 			_is_leader = (swarm_set_leader == 1);
 		}
 
 		// 获取组号
 		int32_t group_id = 1;
-		param_t param_group = param_find("SWARM_GROUP_ID");
-		if (param_group != PARAM_INVALID) {
-			param_get(param_group, &group_id);
+		if (_param_group != PARAM_INVALID) {
+			param_get(_param_group, &group_id);
 		}
 
 		// 始终发送位置信息，不依赖于位置是否更新
@@ -95,11 +104,13 @@ private:
 		trajectory_setpoint_s trajectory;
 		vehicle_status_s vehicle_status;
 		sensor_gps_s gps;
+		home_position_s home;
 
 		_lpos_sub.copy(&local_pos);
 		_trajectory_sub.copy(&trajectory);
 		_vehicle_status_sub.copy(&vehicle_status);
 		_gps_sub.copy(&gps);
+		_home_position_sub.copy(&home);
 
 		// 填充 MAVLink 消息
 		mavlink_uav_info_t msg{};;
@@ -146,6 +157,13 @@ private:
 
 		msg.yaw = local_pos.heading;
 		msg.yaw_speed = local_pos.delta_heading;
+
+		// ★★★ 主机在yaw字段中携带home.z，用于从机高度补偿 ★★★
+		if (_is_leader && home.valid_lpos) {
+			// 使用特殊编码：yaw = home.z + 1000
+			// 这样从机可以识别并提取home.z值
+			msg.yaw = home.z + 1000.0f;
+		}
 
 		// 检查是否处于降落状态（Bit 0）
 		// 检查是否已到达目标位置（Bit 1）- 用于避撞优先级

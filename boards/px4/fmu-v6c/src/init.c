@@ -61,10 +61,17 @@
 #include <nuttx/mmcsd.h>
 #include <nuttx/analog/adc.h>
 #include <nuttx/mm/gran.h>
+#include <nuttx/net/netdev.h>
 #include <chip.h>
 #include <stm32_uart.h>
 #include <arch/board/board.h>
 #include "arm_internal.h"
+
+#ifdef CONFIG_STM32H7_FDCAN1
+int stm32_fdcansockinitialize(int intf);
+FAR struct net_driver_s *netdev_findbyname(FAR const char *ifname);
+int netdev_ifup(FAR struct net_driver_s *dev);
+#endif
 
 #include <drivers/drv_hrt.h>
 #include <drivers/drv_board_led.h>
@@ -203,6 +210,8 @@ stm32_boardinitialize(void)
 
 __EXPORT int board_app_initialize(uintptr_t arg)
 {
+	syslog(LOG_INFO, "[boot] board_app_initialize START\n");
+
 #if !defined(BOOTLOADER)
 
 	/* Power on Interfaces */
@@ -213,6 +222,59 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 
 	px4_platform_init();
 
+	syslog(LOG_INFO, "[boot] About to initialize FDCAN1...\n");
+
+	/* Initialize FDCAN SocketCAN interface - FORCED */
+	syslog(LOG_INFO, "[boot] Initializing FDCAN1...\n");
+	{
+		int ret_can = stm32_fdcansockinitialize(0);
+		if (ret_can < 0) {
+			syslog(LOG_ERR, "[boot] FDCAN1 initialization failed: %d\n", ret_can);
+		} else {
+			syslog(LOG_INFO, "[boot] FDCAN1 initialized as can0\n");
+
+			/* Bring up the interface */
+			usleep(100000);
+			FAR struct net_driver_s *dev = netdev_findbyname("can0");
+			if (dev != NULL) {
+				ret_can = netdev_ifup(dev);
+				if (ret_can < 0) {
+					syslog(LOG_ERR, "[boot] Failed to bring up can0: %d\n", ret_can);
+				} else {
+					syslog(LOG_INFO, "[boot] can0 interface is UP and RUNNING\n");
+				}
+			} else {
+				syslog(LOG_ERR, "[boot] can0 device not found\n");
+			}
+		}
+	}
+
+#ifdef CONFIG_STM32H7_FDCAN2
+	/* Initialize FDCAN2 SocketCAN interface */
+	syslog(LOG_INFO, "[boot] Initializing FDCAN2...\n");
+	{
+		int ret_can = stm32_fdcansockinitialize(1);
+		if (ret_can < 0) {
+			syslog(LOG_ERR, "[boot] FDCAN2 initialization failed: %d\n", ret_can);
+		} else {
+			syslog(LOG_INFO, "[boot] FDCAN2 initialized as can1\n");
+
+			/* Bring up the interface */
+			usleep(100000);
+			FAR struct net_driver_s *dev = netdev_findbyname("can1");
+			if (dev != NULL) {
+				ret_can = netdev_ifup(dev);
+				if (ret_can < 0) {
+					syslog(LOG_ERR, "[boot] Failed to bring up can1: %d\n", ret_can);
+				} else {
+					syslog(LOG_INFO, "[boot] can1 interface is UP and RUNNING\n");
+				}
+			} else {
+				syslog(LOG_ERR, "[boot] can1 device not found\n");
+			}
+		}
+	}
+#endif
 
 	if (OK == board_determine_hw_info()) {
 		syslog(LOG_INFO, "[boot] Rev 0x%1x : Ver 0x%1x %s\n", board_get_hw_revision(), board_get_hw_version(),
@@ -259,6 +321,7 @@ __EXPORT int board_app_initialize(uintptr_t arg)
 	/* Configure the HW based on the manifest */
 
 	px4_platform_configure();
+
 #endif
 	return OK;
 }

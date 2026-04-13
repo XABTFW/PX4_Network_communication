@@ -1,0 +1,5 @@
+menuconfig MODULES_GROUND_RADAR
+	bool "ground_radar"
+	default n
+	---help---
+		Enable support for ground_radar

@@ -1,0 +1,12 @@
+menuconfig DRIVERS_IMU_DAMIAO_DMIMU_L1
+	bool "DM-IMU L1 CAN driver"
+	default n
+	---help---
+		Enable support for Damiao IMU L1 via CAN bus.
+
+		This driver supports:
+		- Accelerometer and gyroscope data
+		- Attitude (Euler angles and quaternions)
+		- Active and request modes
+		- Sensor calibration
+		- Parameter configuration

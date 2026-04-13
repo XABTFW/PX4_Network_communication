@@ -172,6 +172,7 @@ set(msg_files
 	QshellReq.msg
 	QshellRetval.msg
 	RadioStatus.msg
+	RadarTarget.msg
 	RateCtrlStatus.msg
 	RcChannels.msg
 	RcParameterMap.msg

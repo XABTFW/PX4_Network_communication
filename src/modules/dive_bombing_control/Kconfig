@@ -1,0 +1,5 @@
+menuconfig MODULES_DIVE_BOMBING_CONTROL
+	bool "dive_bombing_control"
+	default n
+	---help---
+		Enable support for dive bombing control module

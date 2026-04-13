@@ -156,11 +156,14 @@ then
 	param set CAL_MAG1_ID 197644
 	param set CAL_MAG1_PRIO 50
 
+
 	param set SENS_BOARD_X_OFF 0.000001
 	param set SENS_DPRES_OFF 0.001
 fi
 
 param set-default BAT1_N_CELLS 4
+param set-default SIM_BAT_ENABLE 1
+
 
 # disable check, no CPU load reported on posix yet
 param set-default COM_CPU_MAX -1

@@ -51,7 +51,7 @@ public:
 
 	unsigned get_size() override
 	{
-		return _leader_id_sub.advertised() ? MAVLINK_MSG_ID_LEADER_GROUP_ID + MAVLINK_NUM_NON_PAYLOAD_BYTES : 0;
+		return _leader_id_sub.advertised() ? MAVLINK_MSG_ID_LEADER_GROUP_ID_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES : 0;
 	}
 
 private:
