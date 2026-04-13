@@ -66,6 +66,9 @@ set(msg_files
 	DifferentialPressure.msg
 	DistanceSensor.msg
 	DistanceSensorModeChangeRequest.msg
+	DytCommand.msg
+	DytGuidanceStatus.msg
+	DytTarget.msg
 	Ekf2Timestamps.msg
 	EscReport.msg
 	EscStatus.msg
