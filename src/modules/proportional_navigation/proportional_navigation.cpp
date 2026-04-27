@@ -17,6 +17,7 @@ ProportionalNavigation::ProportionalNavigation() :
 	_target_position.zero();
 	_commanded_acceleration.zero();
 	_commanded_velocity.zero();
+	_commanded_attitude_sp = matrix::Quatf();
 	_radar_filtered_position.zero();
 	_radar_filtered_velocity.zero();
 	_radar_predicted_position.zero();
@@ -206,23 +207,9 @@ void ProportionalNavigation::updateMissionState()
 		break;
 
 	case MissionState::GROUND_STRIKE: {
-		// 地面打击模式的状态转换
-		// 检查是否需要拉升（强制）
-		if (_r < _param_pn_pullup_dist.get()) {
-			PX4_INFO("Ground strike: Pullup triggered! Range: %.2f m", (double)_r);
-			_mission_state = MissionState::PULLUP;
-			_pullup_start_time = hrt_absolute_time();
-			_pullup_target_altitude = -(_param_pn_pullup_alt.get());  // NED坐标
-			break;
-		}
-
-		// 高度安全检查
-		float current_altitude = -_current_position(2);
-		if (current_altitude < (_param_pn_pullup_dist.get() + 5.0f)) {
-			PX4_WARN("Ground strike: Low altitude, forcing pullup");
-			_mission_state = MissionState::PULLUP;
-			_pullup_start_time = hrt_absolute_time();
-			_pullup_target_altitude = -(_param_pn_pullup_alt.get());
+		if (_r < _param_pn_miss_dist.get()) {
+			PX4_INFO("Ground strike impact! Range: %.2f m", (double)_r);
+			_mission_state = MissionState::COMPLETE;
 			break;
 		}
 
@@ -705,80 +692,96 @@ void ProportionalNavigation::generateTrajectorySetpoint()
 
 void ProportionalNavigation::publishSetpoint()
 {
-	// 使用 trajectory_setpoint 进行 Offboard 控制
-	trajectory_setpoint_s setpoint{};
-	setpoint.timestamp = hrt_absolute_time();
-
-	// 根据任务状态设置不同的控制指令
-	if (_mission_state == MissionState::TAKEOFF) {
-		// 起飞阶段：使用速度控制
-		setpoint.position[0] = NAN;
-		setpoint.position[1] = NAN;
-		setpoint.position[2] = NAN;
-
-		// 使用 executeTakeoff() 计算的速度
-		setpoint.velocity[0] = _commanded_velocity(0);
-		setpoint.velocity[1] = _commanded_velocity(1);
-		setpoint.velocity[2] = _commanded_velocity(2);
-
-		setpoint.acceleration[0] = NAN;
-		setpoint.acceleration[1] = NAN;
-		setpoint.acceleration[2] = NAN;
-
-		setpoint.yaw = NAN;  // 保持当前偏航角
-
-	} else if (_mission_state == MissionState::ENGAGING || _mission_state == MissionState::GROUND_STRIKE) {
-		// 打击阶段（包括地面打击）：使用速度控制
-		setpoint.position[0] = NAN;
-		setpoint.position[1] = NAN;
-		setpoint.position[2] = NAN;
-
-		// 直接使用计算出的速度指令
-		setpoint.velocity[0] = _commanded_velocity(0);
-		setpoint.velocity[1] = _commanded_velocity(1);
-		setpoint.velocity[2] = _commanded_velocity(2);
-
-		// 加速度前馈
-		setpoint.acceleration[0] = _commanded_acceleration(0);
-		setpoint.acceleration[1] = _commanded_acceleration(1);
-		setpoint.acceleration[2] = _commanded_acceleration(2);
-
-		setpoint.yaw = NAN;
-
-	} else if (_mission_state == MissionState::PULLUP) {
-		// 拉升阶段：位置+速度控制
-		setpoint.position[0] = _current_position(0);
-		setpoint.position[1] = _current_position(1);
-		setpoint.position[2] = _pullup_target_altitude;
-
-		setpoint.velocity[0] = _commanded_velocity(0);
-		setpoint.velocity[1] = _commanded_velocity(1);
-		setpoint.velocity[2] = _commanded_velocity(2);
-
-		setpoint.yaw = NAN;
-	} else {
-		// IDLE 或 COMPLETE 状态：发送悬停指令
-		setpoint.position[0] = _current_position(0);
-		setpoint.position[1] = _current_position(1);
-		setpoint.position[2] = _current_position(2);
-
-		setpoint.velocity[0] = 0.0f;
-		setpoint.velocity[1] = 0.0f;
-		setpoint.velocity[2] = 0.0f;
-
-		setpoint.yaw = NAN;
-	}
-
-	_trajectory_setpoint_pub.publish(setpoint);
-
 	// 同时发布 offboard_control_mode 以启用 Offboard 模式
 	offboard_control_mode_s offboard_mode{};
 	offboard_mode.timestamp = hrt_absolute_time();
-	offboard_mode.position = (_mission_state == MissionState::PULLUP || _mission_state == MissionState::IDLE || _mission_state == MissionState::COMPLETE);
-	offboard_mode.velocity = (_mission_state == MissionState::TAKEOFF || _mission_state == MissionState::ENGAGING || _mission_state == MissionState::GROUND_STRIKE);
+	offboard_mode.position = false;
+	offboard_mode.velocity = false;
 	offboard_mode.acceleration = false;
 	offboard_mode.attitude = false;
 	offboard_mode.body_rate = false;
+
+	if (_mission_state == MissionState::GROUND_STRIKE) {
+		vehicle_attitude_setpoint_s attitude_setpoint{};
+		attitude_setpoint.timestamp = hrt_absolute_time();
+		attitude_setpoint.yaw_sp_move_rate = _commanded_yaw_rate;
+		_commanded_attitude_sp.copyTo(attitude_setpoint.q_d);
+		attitude_setpoint.thrust_body[0] = 0.0f;
+		attitude_setpoint.thrust_body[1] = 0.0f;
+		attitude_setpoint.thrust_body[2] = -_commanded_thrust;
+		_vehicle_attitude_setpoint_pub.publish(attitude_setpoint);
+		offboard_mode.attitude = true;
+
+	} else {
+		// 使用 trajectory_setpoint 进行 Offboard 控制
+		trajectory_setpoint_s setpoint{};
+		setpoint.timestamp = hrt_absolute_time();
+
+		// 根据任务状态设置不同的控制指令
+		if (_mission_state == MissionState::TAKEOFF) {
+			// 起飞阶段：使用速度控制
+			setpoint.position[0] = NAN;
+			setpoint.position[1] = NAN;
+			setpoint.position[2] = NAN;
+
+			// 使用 executeTakeoff() 计算的速度
+			setpoint.velocity[0] = _commanded_velocity(0);
+			setpoint.velocity[1] = _commanded_velocity(1);
+			setpoint.velocity[2] = _commanded_velocity(2);
+
+			setpoint.acceleration[0] = NAN;
+			setpoint.acceleration[1] = NAN;
+			setpoint.acceleration[2] = NAN;
+
+			setpoint.yaw = NAN;  // 保持当前偏航角
+			offboard_mode.velocity = true;
+
+		} else if (_mission_state == MissionState::ENGAGING) {
+			// 普通接敌：使用速度控制
+			setpoint.position[0] = NAN;
+			setpoint.position[1] = NAN;
+			setpoint.position[2] = NAN;
+
+			setpoint.velocity[0] = _commanded_velocity(0);
+			setpoint.velocity[1] = _commanded_velocity(1);
+			setpoint.velocity[2] = _commanded_velocity(2);
+
+			setpoint.acceleration[0] = _commanded_acceleration(0);
+			setpoint.acceleration[1] = _commanded_acceleration(1);
+			setpoint.acceleration[2] = _commanded_acceleration(2);
+
+			setpoint.yaw = NAN;
+			offboard_mode.velocity = true;
+
+		} else if (_mission_state == MissionState::PULLUP) {
+			// 拉升阶段：位置+速度控制
+			setpoint.position[0] = _current_position(0);
+			setpoint.position[1] = _current_position(1);
+			setpoint.position[2] = _pullup_target_altitude;
+
+			setpoint.velocity[0] = _commanded_velocity(0);
+			setpoint.velocity[1] = _commanded_velocity(1);
+			setpoint.velocity[2] = _commanded_velocity(2);
+
+			setpoint.yaw = NAN;
+			offboard_mode.position = true;
+
+		} else {
+			// IDLE 或 COMPLETE 状态：发送悬停指令
+			setpoint.position[0] = _current_position(0);
+			setpoint.position[1] = _current_position(1);
+			setpoint.position[2] = _current_position(2);
+
+			setpoint.velocity[0] = 0.0f;
+			setpoint.velocity[1] = 0.0f;
+			setpoint.velocity[2] = 0.0f;
+
+			setpoint.yaw = NAN;
+			offboard_mode.position = true;
+		}
+
+		_trajectory_setpoint_pub.publish(setpoint);
+	}
 
 	_offboard_control_mode_pub.publish(offboard_mode);
 }
@@ -792,7 +795,7 @@ bool ProportionalNavigation::safetyCheck()
 		return false;
 	}
 
-	if (_current_velocity.norm() > 50.0f) {
+	if (_mission_state != MissionState::GROUND_STRIKE && _current_velocity.norm() > 50.0f) {
 		PX4_ERR("Velocity too high: %.2f m/s", (double)_current_velocity.norm());
 		return false;
 	}
@@ -807,6 +810,8 @@ void ProportionalNavigation::emergencyAbort()
 	_mission_state = MissionState::IDLE;
 	_commanded_velocity.zero();
 	_commanded_acceleration.zero();
+	_commanded_thrust = 0.0f;
+	_commanded_yaw_rate = 0.0f;
 
 	vehicle_command_s cmd{};
 	cmd.command = vehicle_command_s::VEHICLE_CMD_DO_PAUSE_CONTINUE;
@@ -1087,8 +1092,10 @@ int ProportionalNavigation::custom_command(int argc, char *argv[])
 			PX4_INFO("Target: lat=%.7f, lon=%.7f, alt=%.1f m (AMSL)",
 			         target_lat, target_lon, (double)target_alt);
 			PX4_INFO("Takeoff altitude: %.1f m", (double)get_instance()->_takeoff_altitude);
-			PX4_INFO("Impact angle: %.1f° (vertical)", (double)get_instance()->_param_pn_impact_angle_v.get());
-			PX4_INFO("Pullup distance: %.1f m", (double)get_instance()->_param_pn_pullup_dist.get());
+			PX4_INFO("Strike attitude mode: thrust=%.2f, dive_pitch=%.1f°..%.1f°",
+			         (double)get_instance()->_param_pn_strike_thrust.get(),
+			         (double)get_instance()->_param_pn_strike_pitch.get(),
+			         (double)get_instance()->_param_pn_strike_max_pitch.get());
 			PX4_INFO("");
 			PX4_INFO("Wait 2 seconds, then: commander arm && commander mode offboard");
 
@@ -1161,7 +1168,10 @@ int ProportionalNavigation::custom_command(int argc, char *argv[])
 			PX4_INFO("=== Ground Strike Mission ===");
 			PX4_INFO("Target NED: (%.1f, %.1f, %.1f) m",
 			         (double)target_x, (double)target_y, (double)target_z);
-			PX4_INFO("Impact angle: %.1f° (vertical)", (double)get_instance()->_param_pn_impact_angle_v.get());
+			PX4_INFO("Strike attitude mode: thrust=%.2f, dive_pitch=%.1f°..%.1f°",
+			         (double)get_instance()->_param_pn_strike_thrust.get(),
+			         (double)get_instance()->_param_pn_strike_pitch.get(),
+			         (double)get_instance()->_param_pn_strike_max_pitch.get());
 
 			return 0;
 		} else {
@@ -1599,6 +1609,7 @@ int ProportionalNavigation::custom_command(int argc, char *argv[])
 		PX4_INFO("Pullup enabled: %s", get_instance()->_param_pn_enable_pullup.get() ? "YES" : "NO");
 		PX4_INFO("Velocity: %.2f m/s", (double)get_instance()->_current_velocity.norm());
 		PX4_INFO("Accel cmd: %.2f m/s²", (double)get_instance()->_commanded_acceleration.norm());
+		PX4_INFO("Strike thrust: %.2f", (double)get_instance()->_commanded_thrust);
 
 		// 雷达状态
 		if (get_instance()->_auto_track_radar) {
@@ -1869,12 +1880,10 @@ bool ProportionalNavigation::isRadarDataValid()
 
 void ProportionalNavigation::executeGroundStrike()
 {
-	// 地面俯冲打击：针对地面固定目标的高速俯冲攻击
-	// 特点：
-	// 1. 目标速度为0（地面固定点）
-	// 2. 强制使用铅垂面内落角约束（垂直或大角度俯冲）
-	// 3. 高速接近（不限制速度）
-	// 4. 必须启用拉升（安全考虑）
+	// 纯撞击模式：
+	// 1. 不再保留拉起能力
+	// 2. 直接切换为姿态+推力控制
+	// 3. 持续以最大允许俯冲角和推力撞向目标
 
 	// 计算极坐标系状态
 	_r = computeRange();
@@ -1884,84 +1893,42 @@ void ProportionalNavigation::executeGroundStrike()
 	_v_r = computeRadialVelocity();
 	_v_theta = computeNormalVelocity();
 
-	// 地面打击使用铅垂面内落角约束
-	float q_f_desired = math::radians(_param_pn_impact_angle_v.get());
+	matrix::Vector3f to_target = _target_position - _current_position;
+	const float horizontal_distance = sqrtf(to_target(0) * to_target(0) + to_target(1) * to_target(1));
+	const float current_yaw = matrix::Eulerf(_current_attitude).psi();
+	float desired_yaw = current_yaw;
 
-	// 计算PPNIACG加速度（铅垂面内）
-	float accel_magnitude = computeVerticalIACG(_r, _q, _theta, q_f_desired);
-
-	// 加速度方向：在铅垂面内，垂直于速度方向
-	matrix::Vector2f velocity_2d(
-		_current_velocity(0),  // vx (北)
-		_current_velocity(2)   // vz (下)
-	);
-
-	matrix::Vector3f accel_cmd;
-	accel_cmd.zero();
-
-	float v_norm = velocity_2d.norm();
-	if (v_norm > 0.1f) {
-		// 垂直于速度的方向（铅垂面内）
-		matrix::Vector2f accel_dir_2d(
-			-velocity_2d(1),  // -vz
-			velocity_2d(0)    // vx
-		);
-
-		accel_dir_2d = accel_dir_2d.normalized();
-
-		// 转换回3D（y方向为0）
-		accel_cmd(0) = accel_dir_2d(0) * accel_magnitude;
-		accel_cmd(1) = 0.0f;
-		accel_cmd(2) = accel_dir_2d(1) * accel_magnitude;
+	if (horizontal_distance > 0.1f) {
+		desired_yaw = atan2f(to_target(1), to_target(0));
 	}
 
-	// 限制加速度
-	float max_accel = _param_pn_max_accel.get();
-	if (accel_cmd.norm() > max_accel) {
-		accel_cmd = accel_cmd.normalized() * max_accel;
+	float max_dive_pitch = fabsf(math::radians(_param_pn_strike_max_pitch.get()));
+	const float min_dive_pitch = fabsf(math::radians(_param_pn_strike_pitch.get()));
+
+	if (max_dive_pitch < min_dive_pitch) {
+		max_dive_pitch = min_dive_pitch;
 	}
 
-	// 对加速度方向进行滤波，保持大小
-	float cmd_accel_mag = accel_cmd.norm();
-	if (cmd_accel_mag > 0.1f) {
-		matrix::Vector3f accel_direction = accel_cmd.normalized();
-		matrix::Vector3f prev_direction = _commanded_acceleration.norm() > 0.1f ?
-			_commanded_acceleration.normalized() : accel_direction;
+	const float los_dive_pitch = atan2f(math::max(to_target(2), 0.0f), math::max(horizontal_distance, 0.01f));
+	const float commanded_dive_pitch = math::constrain(math::max(los_dive_pitch, min_dive_pitch), 0.0f, max_dive_pitch);
 
-		// 方向滤波
-		float dir_alpha = 0.6f;
-		matrix::Vector3f filtered_direction = prev_direction * (1.0f - dir_alpha) + accel_direction * dir_alpha;
-		filtered_direction = filtered_direction.normalized();
-
-		_commanded_acceleration = filtered_direction * cmd_accel_mag;
-	} else {
-		_commanded_acceleration = accel_cmd;
-	}
-
-	// 快速加速，不限制速度
-	float accel_multiplier = 100.0f;
-	_commanded_velocity += _commanded_acceleration * _dt * accel_multiplier;
-
-	// 安全检查：高度过低时强制拉升
-	float current_altitude = -_current_position(2);
-	float safety_altitude = _param_pn_pullup_dist.get() + 5.0f;  // 安全高度
-
-	if (current_altitude < safety_altitude || _r < _param_pn_pullup_dist.get()) {
-		PX4_WARN("Ground strike: Safety altitude reached, initiating pullup");
-		_mission_state = MissionState::PULLUP;
-		_pullup_start_time = hrt_absolute_time();
-		_pullup_target_altitude = -(_param_pn_pullup_alt.get());  // NED坐标
-	}
+	_commanded_attitude_sp = matrix::Quatf(matrix::Eulerf(0.0f, -commanded_dive_pitch, desired_yaw));
+	_commanded_thrust = math::constrain(_param_pn_strike_thrust.get(), 0.1f, 1.0f);
+	_commanded_yaw_rate = 0.0f;
+	_commanded_velocity = _current_velocity;
+	_commanded_acceleration.zero();
 
 	// 打印调试信息
 	static hrt_abstime last_print = 0;
 	if (hrt_absolute_time() - last_print > 500_ms) {
-		PX4_INFO("Ground Strike: r=%.1fm, alt=%.1fm, vel=%.1fm/s, q=%.1f°, q_f=%.1f°",
+		const float current_altitude = -_current_position(2);
+		PX4_INFO("Ground Strike: r=%.1fm, alt=%.1fm, vel=%.1fm/s, yaw=%.1f°, dive=%.1f°, thrust=%.2f",
 		         (double)_r,
 		         (double)current_altitude,
-		         (double)_commanded_velocity.norm(),
-		         (double)math::degrees(_q),
-		         (double)math::degrees(_q_f));
+		         (double)_current_velocity.norm(),
+		         (double)math::degrees(desired_yaw),
+		         (double)math::degrees(commanded_dive_pitch),
+		         (double)_commanded_thrust);
 		last_print = hrt_absolute_time();
 	}
 }

@@ -155,3 +155,42 @@ PARAM_DEFINE_FLOAT(PN_PULLUP_ACCEL, 10.f);
  * @group Proportional Navigation
  */
 PARAM_DEFINE_INT32(PN_NO_VEL_LIMIT, 0);
+
+/**
+ * Strike phase thrust command
+ *
+ * Normalized thrust command used during direct-attitude ground strike.
+ * Higher values push harder for terminal impact speed.
+ *
+ * @min 0.1
+ * @max 1.0
+ * @decimal 2
+ * @group Proportional Navigation
+ */
+PARAM_DEFINE_FLOAT(PN_STRIKE_THRUST, 1.0f);
+
+/**
+ * Strike minimum dive pitch
+ *
+ * Minimum nose-down pitch magnitude commanded during direct-attitude ground strike.
+ *
+ * @unit deg
+ * @min 10.0
+ * @max 85.0
+ * @decimal 1
+ * @group Proportional Navigation
+ */
+PARAM_DEFINE_FLOAT(PN_STRIKE_PITCH, 70.0f);
+
+/**
+ * Strike maximum dive pitch
+ *
+ * Upper pitch magnitude limit for direct-attitude ground strike.
+ *
+ * @unit deg
+ * @min 20.0
+ * @max 89.0
+ * @decimal 1
+ * @group Proportional Navigation
+ */
+PARAM_DEFINE_FLOAT(PN_STRIKE_MAX_P, 82.0f);

@@ -15,6 +15,7 @@
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/trajectory_setpoint.h>
+#include <uORB/topics/vehicle_attitude_setpoint.h>
 #include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/offboard_control_mode.h>
 #include <uORB/topics/radar_target.h>
@@ -113,6 +114,7 @@ private:
 
 	// uORB发布
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
+	uORB::Publication<vehicle_attitude_setpoint_s> _vehicle_attitude_setpoint_pub{ORB_ID(vehicle_attitude_setpoint)};
 	uORB::Publication<vehicle_command_s> _vehicle_command_pub{ORB_ID(vehicle_command)};
 	uORB::Publication<offboard_control_mode_s> _offboard_control_mode_pub{ORB_ID(offboard_control_mode)};
 
@@ -171,6 +173,9 @@ private:
 	// 控制输出
 	matrix::Vector3f _commanded_acceleration;
 	matrix::Vector3f _commanded_velocity;
+	matrix::Quatf _commanded_attitude_sp;
+	float _commanded_thrust{0.0f};
+	float _commanded_yaw_rate{0.0f};
 
 	// 当前导引系数
 	float _current_N{3.0f};
@@ -198,18 +203,21 @@ private:
 	bool _use_gps_target{false};  // 是否使用GPS目标
 
 	// 可调参数
-	DEFINE_PARAMETERS(
-		(ParamFloat<px4::params::PNAV_GAIN>) _param_pn_nav_gain,           // 初始导引比 N
-		(ParamFloat<px4::params::PN_MAX_ACCEL>) _param_pn_max_accel,         // 最大加速度
-		(ParamFloat<px4::params::PN_MAX_VEL>) _param_pn_max_vel,             // 最大速度
+		DEFINE_PARAMETERS(
+			(ParamFloat<px4::params::PNAV_GAIN>) _param_pn_nav_gain,           // 初始导引比 N
+			(ParamFloat<px4::params::PN_MAX_ACCEL>) _param_pn_max_accel,         // 最大加速度
+			(ParamFloat<px4::params::PN_MAX_VEL>) _param_pn_max_vel,             // 最大速度
 		(ParamFloat<px4::params::PN_PULLUP_DIST>) _param_pn_pullup_dist,     // 拉升触发距离
 		(ParamFloat<px4::params::PN_PULLUP_ALT>) _param_pn_pullup_alt,       // 拉升目标高度
-		(ParamFloat<px4::params::PN_PULLUP_ACCEL>) _param_pn_pullup_accel,   // 拉升加速度
-		(ParamInt<px4::params::PN_ENABLE_PULLUP>) _param_pn_enable_pullup,   // 启用拉升
-		(ParamFloat<px4::params::PN_IMPACT_ANG_V>) _param_pn_impact_angle_v,  // 铅垂面落角（度）
-		(ParamFloat<px4::params::PN_IMPACT_ANG_H>) _param_pn_impact_angle_h,  // 水平面碰撞角（度）
-		(ParamFloat<px4::params::PN_MISS_DIST>) _param_pn_miss_dist,         // 命中距离
-		(ParamInt<px4::params::PN_CONSTR_MODE>) _param_pn_constraint_mode,   // 约束模式
-		(ParamInt<px4::params::PN_NO_VEL_LIMIT>) _param_pn_no_vel_limit      // 禁用速度限制
-	);
-};
+			(ParamFloat<px4::params::PN_PULLUP_ACCEL>) _param_pn_pullup_accel,   // 拉升加速度
+			(ParamInt<px4::params::PN_ENABLE_PULLUP>) _param_pn_enable_pullup,   // 启用拉升
+			(ParamFloat<px4::params::PN_IMPACT_ANG_V>) _param_pn_impact_angle_v,  // 铅垂面落角（度）
+			(ParamFloat<px4::params::PN_IMPACT_ANG_H>) _param_pn_impact_angle_h,  // 水平面碰撞角（度）
+			(ParamFloat<px4::params::PN_MISS_DIST>) _param_pn_miss_dist,         // 命中距离
+			(ParamInt<px4::params::PN_CONSTR_MODE>) _param_pn_constraint_mode,   // 约束模式
+			(ParamInt<px4::params::PN_NO_VEL_LIMIT>) _param_pn_no_vel_limit,      // 禁用速度限制
+			(ParamFloat<px4::params::PN_STRIKE_THRUST>) _param_pn_strike_thrust,  // 撞击阶段推力
+			(ParamFloat<px4::params::PN_STRIKE_PITCH>) _param_pn_strike_pitch,    // 撞击阶段最小俯冲角
+			(ParamFloat<px4::params::PN_STRIKE_MAX_P>) _param_pn_strike_max_pitch // 撞击阶段最大俯冲角
+		);
+	};

@@ -4,227 +4,22 @@
  *
  ****************************************************************************/
 
+#include "dyt_guidance.hpp"
+
 #include <math.h>
 #include <string.h>
 
-#include <px4_platform_common/getopt.h>
 #include <px4_platform_common/log.h>
-#include <px4_platform_common/module.h>
-#include <px4_platform_common/module_params.h>
-#include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
-#include <uORB/Publication.hpp>
-#include <uORB/Subscription.hpp>
-#include <uORB/SubscriptionInterval.hpp>
-#include <uORB/topics/dyt_command.h>
-#include <uORB/topics/dyt_guidance_status.h>
-#include <uORB/topics/dyt_target.h>
-#include <uORB/topics/manual_control_setpoint.h>
-#include <uORB/topics/offboard_control_mode.h>
-#include <uORB/topics/parameter_update.h>
-#include <uORB/topics/trajectory_setpoint.h>
-#include <uORB/topics/vehicle_angular_velocity.h>
-#include <uORB/topics/vehicle_attitude.h>
-#include <uORB/topics/vehicle_command.h>
-#include <uORB/topics/vehicle_local_position.h>
-#include <uORB/topics/vehicle_status.h>
 
 #include <lib/mathlib/mathlib.h>
-#include <matrix/matrix/math.hpp>
 
-using namespace time_literals;
-using matrix::Dcmf;
-using matrix::Eulerf;
-using matrix::Quatf;
-using matrix::Vector2f;
-using matrix::Vector3f;
-
-class DytGuidance : public ModuleBase<DytGuidance>, public ModuleParams, public px4::ScheduledWorkItem
-{
-public:
-	DytGuidance();
-	~DytGuidance() override = default;
-
-	static int task_spawn(int argc, char *argv[]);
-	static int custom_command(int argc, char *argv[]);
-	static int print_usage(const char *reason = nullptr);
-
-	bool init();
-	void show_status();
-
-private:
-	static constexpr int OBS_BUFFER_LEN{6};
-	static constexpr float TARGET_MIN_BBOX_PX{4.f};
-	static constexpr float TARGET_MAX_LOS_RAD{0.45f};
-	static constexpr float TARGET_MAX_GIMBAL_YAW_RAD{1.22f};
-
-	struct LosObservation {
-		hrt_abstime sample_time{0};
-		Vector3f los_body{};
-		float frame_dt_s{0.f};
-	};
-
-	struct TrackProfile {
-		float nav_gain{0.f};
-		float v_cmd{0.f};
-		float k_a{0.f};
-		float k_v{0.f};
-		uint8_t submode{dyt_guidance_status_s::SUBMODE_FOLLOW};
-	};
-
-	enum class TaskState : uint8_t {
-		Idle = dyt_guidance_status_s::STATE_IDLE,
-		SearchWaitLock = dyt_guidance_status_s::STATE_SEARCH_WAIT_LOCK,
-		TrackFollow = dyt_guidance_status_s::STATE_TRACK_FOLLOW,
-		TrackIntercept = dyt_guidance_status_s::STATE_TRACK_INTERCEPT,
-		LostHold = dyt_guidance_status_s::STATE_LOST_HOLD,
-		Abort = dyt_guidance_status_s::STATE_ABORT
-	};
-
-	void Run() override;
-
-	void update_subscriptions();
-	void update_params_if_needed();
-
-	float aux_value(int index) const;
-	bool aux_switch_active(int index) const;
-	bool preconditions_ok() const;
-	bool manual_takeover_detected() const;
-
-	void handle_new_target(const dyt_target_s &target);
-	bool build_los_body(const dyt_target_s &target, Vector3f &los_body) const;
-	void push_observation(const Vector3f &los_body, hrt_abstime sample_time, float frame_dt_s);
-	void clear_observations();
-	bool update_los_estimate(hrt_abstime now);
-
-	void capture_hold_setpoint();
-	void publish_hold_setpoint();
-	void publish_track_setpoint(const TrackProfile &profile);
-	void publish_offboard_mode(bool hold_mode);
-	void request_offboard_mode();
-	void publish_status();
-
-	void enter_state(TaskState new_state, uint8_t lost_reason = dyt_guidance_status_s::LOST_REASON_NONE);
-	void activate_guidance();
-	void deactivate_guidance(uint8_t lost_reason);
-	void abort_guidance(uint8_t lost_reason);
-	void enter_lost_hold(uint8_t lost_reason);
-	void update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_time = 0);
-	void update_payload_only_reacquire(hrt_abstime now);
-
-	bool target_locked() const;
-	bool target_geometry_valid(const dyt_target_s &target) const;
-	bool target_geometry_valid() const;
-	bool target_fresh() const;
-	bool target_usable() const;
-	bool intercept_allowed() const;
-
-	TrackProfile follow_profile() const;
-	TrackProfile intercept_profile() const;
-
-	void send_dyt_command(uint8_t command, int16_t param_x = 0);
-
-	TaskState _state{TaskState::Idle};
-	uint8_t _lost_reason{dyt_guidance_status_s::LOST_REASON_NONE};
-	uint8_t _requested_submode{dyt_guidance_status_s::SUBMODE_FOLLOW};
-	uint8_t _last_command{dyt_command_s::CMD_NONE};
-
-	bool _prev_activation_request{false};
-	bool _payload_lock_seen{false};
-	bool _payload_lost_hold{false};
-	int _lock_streak{0};
-	int _relock_streak{0};
-
-	hrt_abstime _state_enter_time{0};
-	hrt_abstime _payload_lost_enter_time{0};
-	hrt_abstime _last_offboard_request{0};
-	hrt_abstime _last_retrigger_time{0};
-	hrt_abstime _last_command_time{0};
-	uint32_t _command_pub_count{0};
-
-	LosObservation _observations[OBS_BUFFER_LEN]{};
-	int _observation_count{0};
-
-	dyt_target_s _last_target{};
-	bool _have_target{false};
-
-	vehicle_attitude_s _vehicle_attitude{};
-	vehicle_local_position_s _vehicle_local_position{};
-	vehicle_status_s _vehicle_status{};
-	vehicle_angular_velocity_s _vehicle_angular_velocity{};
-	manual_control_setpoint_s _manual_control{};
-
-	Vector3f _hold_position{};
-	float _hold_yaw{0.f};
-
-	Vector3f _los_ned{};
-	Vector3f _los_body_latest{};
-	Vector3f _los_filtered{};
-	Vector3f _prev_los_filtered{};
-	Vector3f _omega_los{};
-	Vector3f _velocity_sp{};
-	Vector3f _acceleration_sp{};
-	float _yaw_sp{NAN};
-	float _yaw_rate_sp{NAN};
-	hrt_abstime _prev_los_update{0};
-	bool _los_filter_initialized{false};
-
-	uORB::Subscription _dyt_target_sub{ORB_ID(dyt_target)};
-	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
-	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
-	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
-	uORB::Subscription _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
-	uORB::Subscription _manual_control_sub{ORB_ID(manual_control_setpoint)};
-	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
-
-	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
-	uORB::Publication<offboard_control_mode_s> _offboard_control_mode_pub{ORB_ID(offboard_control_mode)};
-	uORB::Publication<vehicle_command_s> _vehicle_command_pub{ORB_ID(vehicle_command)};
-	uORB::Publication<dyt_command_s> _dyt_command_pub{ORB_ID(dyt_command)};
-	uORB::Publication<dyt_guidance_status_s> _dyt_guidance_status_pub{ORB_ID(dyt_guidance_status)};
-
-	DEFINE_PARAMETERS(
-		(ParamInt<px4::params::DYTG_ACT_AUX>) _param_act_aux,
-		(ParamInt<px4::params::DYTG_INT_AUX>) _param_int_aux,
-		(ParamFloat<px4::params::DYTG_STK_TK>) _param_stick_takeover,
-		(ParamInt<px4::params::DYTG_LOCK_N>) _param_lock_frames,
-		(ParamInt<px4::params::DYTG_RELOCKN>) _param_relock_frames,
-		(ParamInt<px4::params::DYTG_WAITMS>) _param_wait_ms,
-		(ParamInt<px4::params::DYTG_LOSTMS>) _param_lost_ms,
-		(ParamInt<px4::params::DYTG_CTRMS>) _param_center_ms,
-		(ParamInt<px4::params::DYTG_RTRYMS>) _param_retry_ms,
-		(ParamFloat<px4::params::DYTG_DLY_MS>) _param_delay_ms,
-		(ParamFloat<px4::params::DYTG_MAXAGE>) _param_max_age,
-		(ParamFloat<px4::params::DYTG_MAXJIT>) _param_max_gap,
-		(ParamFloat<px4::params::DYTG_INTDLY>) _param_intercept_delay,
-		(ParamFloat<px4::params::DYTG_N_FOL>) _param_n_follow,
-		(ParamFloat<px4::params::DYTG_V_FOL>) _param_v_follow,
-		(ParamFloat<px4::params::DYTG_KA_FOL>) _param_ka_follow,
-		(ParamFloat<px4::params::DYTG_KV_FOL>) _param_kv_follow,
-		(ParamFloat<px4::params::DYTG_N_INT>) _param_n_intercept,
-		(ParamFloat<px4::params::DYTG_V_INT>) _param_v_intercept,
-		(ParamFloat<px4::params::DYTG_KA_INT>) _param_ka_intercept,
-		(ParamFloat<px4::params::DYTG_KV_INT>) _param_kv_intercept,
-		(ParamFloat<px4::params::DYTG_VMIN>) _param_vmin,
-		(ParamFloat<px4::params::DYTG_MAXV>) _param_max_vel,
-		(ParamFloat<px4::params::DYTG_MAXACC>) _param_max_acc,
-		(ParamFloat<px4::params::DYTG_MAXYAWR>) _param_max_yaw_rate_deg,
-		(ParamFloat<px4::params::DYTG_YAWLIM>) _param_yaw_limit_deg,
-		(ParamFloat<px4::params::DYTG_MAXDZ>) _param_max_dz,
-		(ParamFloat<px4::params::DYTG_ZSCALE>) _param_z_scale,
-		(ParamFloat<px4::params::DYTG_FCONE>) _param_front_cone_deg,
-		(ParamFloat<px4::params::DYTG_LPF_A>) _param_lpf_alpha,
-		(ParamFloat<px4::params::DYTG_PREDMAX>) _param_pred_max,
-		(ParamInt<px4::params::DYTG_LXSIGN>) _param_los_x_sign,
-		(ParamInt<px4::params::DYTG_LYSIGN>) _param_los_y_sign,
-		(ParamInt<px4::params::DYTG_RSIGN>) _param_roll_sign,
-		(ParamInt<px4::params::DYTG_PSIGN>) _param_pitch_sign,
-		(ParamInt<px4::params::DYTG_YSIGN>) _param_yaw_sign,
-		(ParamFloat<px4::params::DYTG_ROFF>) _param_roll_off_deg,
-		(ParamFloat<px4::params::DYTG_POFF>) _param_pitch_off_deg,
-		(ParamFloat<px4::params::DYTG_YOFF>) _param_yaw_off_deg
-	);
-};
-
+/**
+ * @brief 构造制导模块实例。
+ *
+ * 输入：无。
+ * 输出：初始化基于工作队列的模块对象。
+ * 功能：将控制器挂接到 PX4 工作队列，并清空缓存的目标数据。
+ */
 DytGuidance::DytGuidance() :
 	ModuleParams(nullptr),
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::nav_and_controllers)
@@ -232,32 +27,43 @@ DytGuidance::DytGuidance() :
 	memset(&_last_target, 0, sizeof(_last_target));
 }
 
+/**
+ * @brief 初始化模块的周期执行。
+ *
+ * 输入：无。
+ * @return 周期循环配置完成后返回 true。
+ * 功能：以 20 ms 周期启动控制器的 Run 循环。
+ */
 bool DytGuidance::init()
 {
 	ScheduleOnInterval(20_ms);
 	return true;
 }
 
+/**
+ * @brief 打印当前控制器状态。
+ *
+ * 输入：缓存的模块状态、目标状态和参数配置。
+ * 输出：向 PX4 日志输出供操作员查看的状态信息。
+ * 功能：暴露高层级运行诊断信息。
+ */
 void DytGuidance::show_status()
 {
 	PX4_INFO("state: %u", static_cast<unsigned>(_state));
 	PX4_INFO("target fresh: %d", target_fresh());
 	PX4_INFO("target locked: %d", target_locked());
-	PX4_INFO("target geometry: %d", target_geometry_valid());
 	PX4_INFO("observations: %d", _observation_count);
-	PX4_INFO("payload lock seen: %d", _payload_lock_seen);
-	PX4_INFO("payload lost hold: %d", _payload_lost_hold);
-	PX4_INFO("preconditions ok: %d", preconditions_ok());
-	PX4_INFO("activation request: %d", aux_switch_active(_param_act_aux.get()));
-	PX4_INFO("activation aux value: %.2f", static_cast<double>(aux_value(_param_act_aux.get())));
-	PX4_INFO("activation aux: %ld", static_cast<long>(_param_act_aux.get()));
-	PX4_INFO("intercept aux: %ld", static_cast<long>(_param_int_aux.get()));
-	PX4_INFO("command pubs: %lu", static_cast<unsigned long>(_command_pub_count));
-	PX4_INFO("last command: %u", static_cast<unsigned>(_last_command));
-	PX4_INFO("last command age: %.3f s", static_cast<double>(_last_command_time > 0 ?
-			(hrt_absolute_time() - _last_command_time) * 1e-6 : -1.0));
+	PX4_INFO("activation aux: %d", _param_act_aux.get());
+	PX4_INFO("intercept aux: %d", _param_int_aux.get());
 }
 
+/**
+ * @brief 当 PX4 报告参数变化时刷新参数包装器。
+ *
+ * 输入：来自 uORB 的参数更新通知。
+ * 输出：更新控制器使用的缓存参数值。
+ * 功能：使运行时行为与最新参数配置保持同步。
+ */
 void DytGuidance::update_params_if_needed()
 {
 	if (_parameter_update_sub.updated()) {
@@ -267,6 +73,13 @@ void DytGuidance::update_params_if_needed()
 	}
 }
 
+/**
+ * @brief 将最新订阅数据拉取到本地缓存。
+ *
+ * 输入：待处理的飞行器、遥控和目标话题更新。
+ * 输出：刷新缓存的话题结构体，并将新目标样本交给后续处理。
+ * 功能：在每次控制循环开始时集中完成所有订阅更新。
+ */
 void DytGuidance::update_subscriptions()
 {
 	_vehicle_attitude_sub.update(&_vehicle_attitude);
@@ -284,6 +97,13 @@ void DytGuidance::update_subscriptions()
 	}
 }
 
+/**
+ * @brief 按编号读取一个遥控 AUX 通道。
+ *
+ * @param index AUX 通道编号，范围为 1..6。
+ * @return 编号有效时返回通道值，否则返回 NAN。
+ * 功能：将通用 AUX 编号转换为对应的 PX4 遥控字段。
+ */
 float DytGuidance::aux_value(int index) const
 {
 	switch (index) {
@@ -297,12 +117,26 @@ float DytGuidance::aux_value(int index) const
 	}
 }
 
+/**
+ * @brief 将 AUX 通道值转换为布尔激活状态。
+ *
+ * @param index AUX 通道编号，范围为 1..6。
+ * @return 当通道值有限且大于 0.5 时返回 true。
+ * 功能：把飞手的 AUX 输入解释为开关量。
+ */
 bool DytGuidance::aux_switch_active(int index) const
 {
 	const float value = aux_value(index);
 	return PX4_ISFINITE(value) && value > 0.5f;
 }
 
+/**
+ * @brief 检查当前是否允许自主制导运行。
+ *
+ * 输入：缓存的解锁状态、失效保护状态和本地位置有效性状态。
+ * @return 最低飞行器状态前置条件满足时返回 true。
+ * 功能：以基本安全条件限制制导激活和持续控制。
+ */
 bool DytGuidance::preconditions_ok() const
 {
 	return _vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED
@@ -311,6 +145,13 @@ bool DytGuidance::preconditions_ok() const
 	       && _vehicle_local_position.z_valid;
 }
 
+/**
+ * @brief 检测操作员是否通过杆量进行接管。
+ *
+ * 输入：遥控设定值和接管阈值参数。
+ * @return 当 roll、pitch 或 yaw 杆量超过接管阈值时返回 true。
+ * 功能：识别飞手干预并停止自主控制。
+ */
 bool DytGuidance::manual_takeover_detected() const
 {
 	if (!_manual_control.valid) {
@@ -323,9 +164,16 @@ bool DytGuidance::manual_takeover_detected() const
 	       || fabsf(_manual_control.yaw) > threshold;
 }
 
+/**
+ * @brief 处理新收到的一条目标样本。
+ *
+ * @param target 最新视觉跟踪器输出。
+ * 输出：当样本可用时向 LOS 观测历史中追加一条记录。
+ * 功能：校验目标数据，并将其转换为缓存 LOS 历史使用的格式。
+ */
 void DytGuidance::handle_new_target(const dyt_target_s &target)
 {
-	if (!target.target_valid || !target_geometry_valid(target)) {
+	if (!target.target_valid) {
 		return;
 	}
 
@@ -338,6 +186,14 @@ void DytGuidance::handle_new_target(const dyt_target_s &target)
 	push_observation(los_body, target.timestamp_sample, target.frame_dt_s);
 }
 
+/**
+ * @brief 将 LOS 角度和云台姿态转换为机体系 LOS 向量。
+ *
+ * @param target 包含 LOS 角和云台角度的目标消息。
+ * @param[out] los_body 转换成功时输出归一化的机体系 LOS 向量。
+ * @return 成功生成有限且有效的 LOS 向量时返回 true。
+ * 功能：在坐标旋转前应用配置的符号和零偏修正。
+ */
 bool DytGuidance::build_los_body(const dyt_target_s &target, Vector3f &los_body) const
 {
 	const float los_x = target.los_x_rad * static_cast<float>(_param_los_x_sign.get());
@@ -370,6 +226,15 @@ bool DytGuidance::build_los_body(const dyt_target_s &target, Vector3f &los_body)
 	return true;
 }
 
+/**
+ * @brief 向有界观测历史中插入一条 LOS 样本。
+ *
+ * @param los_body 机体系 LOS 单位向量。
+ * @param sample_time 样本时间戳。
+ * @param frame_dt_s 数据源帧间隔，单位为秒。
+ * 输出：更新观测缓冲区和最新 LOS 缓存。
+ * 功能：维护一段最近 LOS 历史，用于滤波和预测。
+ */
 void DytGuidance::push_observation(const Vector3f &los_body, hrt_abstime sample_time, float frame_dt_s)
 {
 	if (_observation_count < OBS_BUFFER_LEN) {
@@ -386,6 +251,13 @@ void DytGuidance::push_observation(const Vector3f &los_body, hrt_abstime sample_
 	_los_body_latest = los_body;
 }
 
+/**
+ * @brief 清空已保存的 LOS 观测和派生滤波状态。
+ *
+ * 输入：无。
+ * 输出：清空观测缓冲区并重置滤波 LOS 估计。
+ * 功能：将 LOS 估计器恢复到初始状态。
+ */
 void DytGuidance::clear_observations()
 {
 	_observation_count = 0;
@@ -402,6 +274,13 @@ void DytGuidance::clear_observations()
 	_prev_los_update = 0;
 }
 
+/**
+ * @brief 更新 NED 坐标系下预测并滤波后的 LOS 估计。
+ *
+ * @param now 当前时间戳，用于外推和求导。
+ * @return LOS 估计成功时返回 true，否则返回 false。
+ * 功能：预测最新 LOS 样本，将其旋转到 NED 系，并估计 LOS 角速度。
+ */
 bool DytGuidance::update_los_estimate(hrt_abstime now)
 {
 	if (_observation_count <= 0) {
@@ -461,6 +340,13 @@ bool DytGuidance::update_los_estimate(hrt_abstime now)
 	return true;
 }
 
+/**
+ * @brief 将当前飞行器位姿保存为悬停参考。
+ *
+ * 输入：缓存的飞行器本地位置和姿态。
+ * 输出：更新模块中的悬停位置和悬停偏航成员。
+ * 功能：记录一个稳定的回退设定值，用于悬停控制。
+ */
 void DytGuidance::capture_hold_setpoint()
 {
 	_hold_position(0) = _vehicle_local_position.x;
@@ -469,31 +355,25 @@ void DytGuidance::capture_hold_setpoint()
 	_hold_yaw = Eulerf(Quatf(_vehicle_attitude.q)).psi();
 }
 
+/**
+ * @brief 检查跟踪器当前是否报告有效锁定。
+ *
+ * 输入：缓存的最近一条目标样本。
+ * @return 目标有效且处于 locked 跟踪状态时返回 true。
+ * 功能：区分真正锁定和普通的目标存在状态。
+ */
 bool DytGuidance::target_locked() const
 {
-	return _have_target && _last_target.tracking_state == dyt_target_s::TRACKING_STATE_LOCKED
-	       && _last_target.target_valid;
+	return _have_target && _last_target.tracking_state == dyt_target_s::TRACKING_STATE_LOCKED && _last_target.target_valid;
 }
 
-bool DytGuidance::target_geometry_valid(const dyt_target_s &target) const
-{
-	const bool bbox_valid = PX4_ISFINITE(target.bbox_width_px) && PX4_ISFINITE(target.bbox_height_px)
-				&& target.bbox_width_px >= TARGET_MIN_BBOX_PX
-				&& target.bbox_height_px >= TARGET_MIN_BBOX_PX;
-	const bool los_valid = PX4_ISFINITE(target.los_x_rad) && PX4_ISFINITE(target.los_y_rad)
-			       && fabsf(target.los_x_rad) <= TARGET_MAX_LOS_RAD
-			       && fabsf(target.los_y_rad) <= TARGET_MAX_LOS_RAD;
-	const bool yaw_valid = PX4_ISFINITE(target.gimbal_yaw_rad)
-			       && fabsf(target.gimbal_yaw_rad) <= TARGET_MAX_GIMBAL_YAW_RAD;
-
-	return bbox_valid && los_valid && yaw_valid;
-}
-
-bool DytGuidance::target_geometry_valid() const
-{
-	return _have_target && target_geometry_valid(_last_target);
-}
-
+/**
+ * @brief 检查最新目标样本是否足够新鲜，可用于控制。
+ *
+ * 输入：缓存的目标时间戳、帧间隔和新鲜度参数。
+ * @return 目标年龄和帧间隔都在配置范围内时返回 true。
+ * 功能：剔除陈旧、超时或错误的跟踪输出。
+ */
 bool DytGuidance::target_fresh() const
 {
 	if (!_have_target || _last_target.timestamp_sample == 0) {
@@ -508,11 +388,25 @@ bool DytGuidance::target_fresh() const
 	       && _last_target.tracking_state != dyt_target_s::TRACKING_STATE_ERROR;
 }
 
+/**
+ * @brief 检查目标是否已具备主动制导条件。
+ *
+ * 输入：目标锁定状态、新鲜度状态和 LOS 观测数量。
+ * @return 控制器拥有已锁定、足够新鲜且带 LOS 缓存的目标时返回 true。
+ * 功能：为跟踪模式提供统一的可用性判断。
+ */
 bool DytGuidance::target_usable() const
 {
-	return target_locked() && target_fresh() && target_geometry_valid() && _observation_count > 0;
+	return target_locked() && target_fresh() && _observation_count > 0;
 }
 
+/**
+ * @brief 检查当前是否允许进入拦截模式。
+ *
+ * 输入：目标可用性、时延设置、帧间隔和最新 LOS 方向。
+ * @return 时序和几何约束都允许时返回 true。
+ * 功能：以比跟随模式更严格的条件保护拦截模式。
+ */
 bool DytGuidance::intercept_allowed() const
 {
 	if (!target_usable()) {
@@ -531,18 +425,39 @@ bool DytGuidance::intercept_allowed() const
 	return _los_body_latest(0) > cone_cos;
 }
 
+/**
+ * @brief 构造跟随模式使用的控制参数组合。
+ *
+ * 输入：跟随模式调参。
+ * @return 返回跟随模式的制导增益和指令速度。
+ * 功能：将跟随模式调参打包成可复用结构体。
+ */
 DytGuidance::TrackProfile DytGuidance::follow_profile() const
 {
 	return {_param_n_follow.get(), _param_v_follow.get(), _param_ka_follow.get(), _param_kv_follow.get(),
 		dyt_guidance_status_s::SUBMODE_FOLLOW};
 }
 
+/**
+ * @brief 构造拦截模式使用的控制参数组合。
+ *
+ * 输入：拦截模式调参。
+ * @return 返回拦截模式的制导增益和指令速度。
+ * 功能：将拦截模式调参打包成可复用结构体。
+ */
 DytGuidance::TrackProfile DytGuidance::intercept_profile() const
 {
 	return {_param_n_intercept.get(), _param_v_intercept.get(), _param_ka_intercept.get(), _param_kv_intercept.get(),
 		dyt_guidance_status_s::SUBMODE_INTERCEPT};
 }
 
+/**
+ * @brief 发布悬停位置轨迹设定值。
+ *
+ * 输入：缓存的悬停位置和悬停偏航角。
+ * 输出：发布一个用于位置保持的 `trajectory_setpoint`。
+ * 功能：指令飞行器保持在记录下来的悬停位姿。
+ */
 void DytGuidance::publish_hold_setpoint()
 {
 	trajectory_setpoint_s setpoint{};
@@ -565,6 +480,13 @@ void DytGuidance::publish_hold_setpoint()
 	_trajectory_setpoint_pub.publish(setpoint);
 }
 
+/**
+ * @brief 使用当前制导参数发布跟踪设定值。
+ *
+ * @param profile 跟随或拦截行为对应的制导增益和速度指令。
+ * 输出：发布速度、加速度、偏航和偏航角速度设定值。
+ * 功能：根据 LOS 几何关系和当前飞行器速度计算运动指令。
+ */
 void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 {
 	if (!update_los_estimate(hrt_absolute_time())) {
@@ -642,6 +564,13 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	_trajectory_setpoint_pub.publish(setpoint);
 }
 
+/**
+ * @brief 发布当前启用的 offboard 控制字段。
+ *
+ * @param hold_mode 为 true 表示位置保持，为 false 表示速度跟踪。
+ * 输出：发布 `offboard_control_mode` 消息。
+ * 功能：让 PX4 的 offboard 模式标志与下一条设定值类型保持一致。
+ */
 void DytGuidance::publish_offboard_mode(bool hold_mode)
 {
 	offboard_control_mode_s mode{};
@@ -656,11 +585,20 @@ void DytGuidance::publish_offboard_mode(bool hold_mode)
 	_offboard_control_mode_pub.publish(mode);
 }
 
+/**
+ * @brief 周期性发送切换或保持 offboard 模式的请求。
+ *
+ * 输入：当前时间、上次请求时间、当前导航模式和飞行器标识信息。
+ * 输出：未进入 offboard 前最多以 5 Hz 发布请求，进入后降为 1 Hz 保活。
+ * 功能：在制导工作期间尽快切入并持续维持 PX4 处于 offboard 模式。
+ */
 void DytGuidance::request_offboard_mode()
 {
 	const hrt_abstime now = hrt_absolute_time();
+	const hrt_abstime request_period = (_vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_OFFBOARD)
+					   ? 1_s : 200_ms;
 
-	if ((now - _last_offboard_request) < 1_s) {
+	if ((now - _last_offboard_request) < request_period) {
 		return;
 	}
 
@@ -679,6 +617,13 @@ void DytGuidance::request_offboard_mode()
 	_last_offboard_request = now;
 }
 
+/**
+ * @brief 发布内部制导状态汇总信息。
+ *
+ * 输入：控制器状态、LOS 估计和最新输出设定值。
+ * 输出：发布 `dyt_guidance_status` 消息。
+ * 功能：为遥测、调试和监控暴露模块状态。
+ */
 void DytGuidance::publish_status()
 {
 	dyt_guidance_status_s status{};
@@ -711,6 +656,14 @@ void DytGuidance::publish_status()
 	_dyt_guidance_status_pub.publish(status);
 }
 
+/**
+ * @brief 切换任务状态机并执行进入动作。
+ *
+ * @param new_state 目标控制器状态。
+ * @param lost_reason 与本次切换相关的原因码。
+ * 输出：更新状态记录，并在需要时执行各状态的复位逻辑。
+ * 功能：集中处理所有状态切换及配套清理动作。
+ */
 void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 {
 	_state = new_state;
@@ -735,60 +688,69 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 	}
 }
 
+/**
+ * @brief 启动一轮新的自主制导流程。
+ *
+ * 输入：当前飞行器前置条件状态和当前位姿。
+ * 输出：重置控制器状态、记录悬停位姿，并向跟踪器发送自动锁定命令。
+ * 功能：将模块从空闲状态推进到搜索和跟踪流程。
+ */
 void DytGuidance::activate_guidance()
 {
-	_payload_lock_seen = false;
-	_payload_lost_hold = false;
-	_payload_lost_enter_time = 0;
-	_last_retrigger_time = 0;
-	send_dyt_command(dyt_command_s::CMD_AUTO_LOCK, -100);
-
 	if (!preconditions_ok()) {
-		PX4_WARN("DYT guidance preconditions not met, lock command sent only");
+		PX4_WARN("DYT guidance preconditions not met");
 		return;
 	}
 
 	clear_observations();
 	capture_hold_setpoint();
 	_requested_submode = dyt_guidance_status_s::SUBMODE_FOLLOW;
+	send_dyt_command(dyt_command_s::CMD_AUTO_LOCK, -100);
 	enter_state(TaskState::SearchWaitLock);
 }
 
-void DytGuidance::deactivate_guidance(uint8_t lost_reason)
-{
-	_payload_lock_seen = false;
-	_payload_lost_hold = false;
-	_payload_lost_enter_time = 0;
-	_last_retrigger_time = 0;
-	send_dyt_command(dyt_command_s::CMD_STOP_TRACK);
-
-	if (_state != TaskState::Idle) {
-		enter_state(TaskState::Abort, lost_reason);
-	}
-}
-
+/**
+ * @brief 中止当前制导流程。
+ *
+ * @param lost_reason 本次中止记录的原因码。
+ * 输出：命令跟踪器停止，并将状态机推进到中止状态。
+ * 功能：在出现阻塞条件时终止自主制导。
+ */
 void DytGuidance::abort_guidance(uint8_t lost_reason)
 {
 	send_dyt_command(dyt_command_s::CMD_STOP_TRACK);
 	enter_state(TaskState::Abort, lost_reason);
 }
 
+/**
+ * @brief 进入临时丢目标保持状态。
+ *
+ * @param lost_reason 描述目标跟踪丢失的原因码。
+ * 输出：携带该原因码将控制器切换到保持状态。
+ * 功能：在等待目标重新锁定期间维持飞行器稳定。
+ */
 void DytGuidance::enter_lost_hold(uint8_t lost_reason)
 {
 	enter_state(TaskState::LostHold, lost_reason);
 }
 
-void DytGuidance::update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_time)
+/**
+ * @brief 在丢目标保持期间主动重捕获目标。
+ *
+ * @param now 当前高精度时间戳。
+ * 输出：回中等待结束后按周期发送重新触发锁定命令。
+ * 功能：处理吊舱丢锁后退出跟踪且停在边界角的情况。
+ */
+void DytGuidance::update_lost_reacquire(hrt_abstime now)
 {
-	const hrt_abstime enter_time = lost_enter_time > 0 ? lost_enter_time : _state_enter_time;
-	const int32_t center_ms = math::max(_param_center_ms.get(), int32_t{0});
+	const int center_ms = _param_center_ms.get() > 0 ? _param_center_ms.get() : 0;
 	const hrt_abstime center_delay = static_cast<hrt_abstime>(center_ms) * 1000ULL;
 
-	if ((now - enter_time) < center_delay) {
+	if ((now - _state_enter_time) < center_delay) {
 		return;
 	}
 
-	const int32_t retry_ms = math::max(_param_retry_ms.get(), int32_t{100});
+	const int retry_ms = _param_retry_ms.get() > 0 ? _param_retry_ms.get() : 1000;
 	const hrt_abstime retry_interval = static_cast<hrt_abstime>(retry_ms) * 1000ULL;
 
 	if (_last_retrigger_time == 0 || (now - _last_retrigger_time) >= retry_interval) {
@@ -797,51 +759,42 @@ void DytGuidance::update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_
 	}
 }
 
-void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
-{
-	if (target_usable()) {
-		_payload_lock_seen = true;
-		_payload_lost_hold = false;
-		_payload_lost_enter_time = 0;
-		_last_retrigger_time = 0;
-		return;
-	}
-
-	if (!_payload_lock_seen) {
-		return;
-	}
-
-	if (!_payload_lost_hold) {
-		_payload_lost_hold = true;
-		_payload_lost_enter_time = now;
-		_last_retrigger_time = 0;
-		clear_observations();
-		send_dyt_command(dyt_command_s::CMD_CENTER_GIMBAL);
-	}
-
-	update_lost_reacquire(now, _payload_lost_enter_time);
-}
-
-void DytGuidance::send_dyt_command(uint8_t command, int16_t param_x)
+/**
+ * @brief 向 DYT 跟踪器接口发布命令。
+ *
+ * @param command 要发送的命令标识。
+ * @param param_x 命令附带的可选整型参数。
+ * @param param_y 命令附带的第二个可选整型参数。
+ * 输出：发布 `dyt_command` 消息。
+ * 功能：发送自动锁定、停止、重新触发等跟踪器控制请求。
+ */
+void DytGuidance::send_dyt_command(uint8_t command, int16_t param_x, int16_t param_y)
 {
 	dyt_command_s msg{};
 	msg.timestamp = hrt_absolute_time();
 	msg.command = command;
 	msg.param_x = param_x;
+	msg.param_y = param_y;
 	_dyt_command_pub.publish(msg);
-	_last_command = command;
-	_last_command_time = msg.timestamp;
-	++_command_pub_count;
 }
 
+/**
+ * @brief 执行一次完整的控制器更新周期。
+ *
+ * 输入：订阅数据、参数、飞手请求和内部状态机状态。
+ * 输出：状态切换、offboard 模式请求、轨迹设定值和状态遥测。
+ * 功能：从感知处理到指令发布，完整运行一次制导状态机。
+ */
 void DytGuidance::Run()
 {
+	// 模块被要求退出时，停止调度并完成清理。
 	if (should_exit()) {
 		ScheduleClear();
 		exit_and_cleanup();
 		return;
 	}
 
+	// 每个周期先刷新参数和订阅缓存，后续逻辑只读本地快照。
 	update_params_if_needed();
 	update_subscriptions();
 
@@ -849,22 +802,22 @@ void DytGuidance::Run()
 	const bool activation_request = aux_switch_active(_param_act_aux.get());
 	const bool intercept_request = aux_switch_active(_param_int_aux.get());
 
+	// 激活开关上升沿时启动制导流程。
 	if (activation_request && !_prev_activation_request) {
 		activate_guidance();
 	}
 
-	if (!activation_request && _prev_activation_request) {
-		deactivate_guidance(dyt_guidance_status_s::LOST_REASON_PRECONDITION);
+	// 激活开关下降沿时，若当前不在 Idle，则按前置条件失效中止。
+	if (!activation_request && _prev_activation_request && _state != TaskState::Idle) {
+		abort_guidance(dyt_guidance_status_s::LOST_REASON_PRECONDITION);
 	}
 
+	// 缓存当前遥控请求，供下一周期做边沿检测和子模式选择。
 	_prev_activation_request = activation_request;
 	_requested_submode = intercept_request ? dyt_guidance_status_s::SUBMODE_INTERCEPT :
 			     dyt_guidance_status_s::SUBMODE_FOLLOW;
 
-	if (activation_request && (_state == TaskState::Idle || _state == TaskState::Abort)) {
-		update_payload_only_reacquire(now);
-	}
-
+	// 非 Idle/Abort 状态下持续检查安全前置条件和飞手接管。
 	if (_state != TaskState::Idle && _state != TaskState::Abort) {
 		if (!preconditions_ok()) {
 			abort_guidance(dyt_guidance_status_s::LOST_REASON_PRECONDITION);
@@ -875,9 +828,11 @@ void DytGuidance::Run()
 
 	switch (_state) {
 	case TaskState::Idle:
+		// 空闲态不主动做状态转换，只等待激活请求。
 		break;
 
 	case TaskState::SearchWaitLock:
+		// 搜索等待锁定：累计连续有效目标帧，达到门限后进入跟踪。
 		if (target_usable()) {
 			++_lock_streak;
 
@@ -886,6 +841,7 @@ void DytGuidance::Run()
 			}
 
 		} else {
+			// 一旦目标不连续可用，锁定计数清零；超时则进入失锁保持。
 			_lock_streak = 0;
 
 			if ((now - _state_enter_time) > static_cast<hrt_abstime>(_param_wait_ms.get()) * 1000ULL) {
@@ -895,6 +851,7 @@ void DytGuidance::Run()
 		break;
 
 	case TaskState::TrackFollow:
+		// 常规跟踪：目标失效则转 LostHold，满足条件且飞手请求时切到截获。
 		if (!target_usable()) {
 			enter_lost_hold(target_locked() ? dyt_guidance_status_s::LOST_REASON_STALE :
 					 dyt_guidance_status_s::LOST_REASON_TRACKING);
@@ -904,6 +861,7 @@ void DytGuidance::Run()
 		break;
 
 	case TaskState::TrackIntercept:
+		// 截获跟踪：目标失效退入 LostHold，截获请求取消或条件不满足则退回 Follow。
 		if (!target_usable()) {
 			enter_lost_hold(target_locked() ? dyt_guidance_status_s::LOST_REASON_STALE :
 					 dyt_guidance_status_s::LOST_REASON_TRACKING);
@@ -913,6 +871,7 @@ void DytGuidance::Run()
 		break;
 
 	case TaskState::LostHold:
+		// 失锁保持：允许短时间等待重捕获，连续重捕获足够帧后恢复跟踪。
 		if (target_usable()) {
 			++_relock_streak;
 
@@ -921,6 +880,7 @@ void DytGuidance::Run()
 			}
 
 		} else {
+			// 重捕获中断则重新计数；超过保持时长后彻底中止本次制导。
 			_relock_streak = 0;
 
 			if ((now - _state_enter_time) > static_cast<hrt_abstime>(_param_lost_ms.get()) * 1000ULL) {
@@ -932,31 +892,44 @@ void DytGuidance::Run()
 		break;
 
 	case TaskState::Abort:
+		// Abort 作为过渡态，仅保留一个周期，下一拍回到 Idle。
 		enter_state(TaskState::Idle, dyt_guidance_status_s::LOST_REASON_NONE);
 		break;
 	}
 
+	// 搜索和失锁保持阶段仅维持 offboard+悬停，不输出跟踪机动。
 	if (_state == TaskState::SearchWaitLock || _state == TaskState::LostHold) {
 		request_offboard_mode();
 		publish_offboard_mode(true);
 		publish_hold_setpoint();
 	}
 
+	// Follow 子模式下发布常规跟踪轨迹。
 	if (_state == TaskState::TrackFollow) {
 		request_offboard_mode();
 		publish_offboard_mode(false);
 		publish_track_setpoint(follow_profile());
 	}
 
+	// Intercept 子模式下发布更激进的截获轨迹。
 	if (_state == TaskState::TrackIntercept) {
 		request_offboard_mode();
 		publish_offboard_mode(false);
 		publish_track_setpoint(intercept_profile());
 	}
 
+	// 无论状态如何都发布一次状态遥测，供上位机和日志观察。
 	publish_status();
 }
 
+/**
+ * @brief 创建并启动模块单例实例。
+ *
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 启动成功返回 PX4_OK，否则返回 PX4_ERROR。
+ * 功能：分配模块对象、保存单例指针并初始化调度。
+ */
 int DytGuidance::task_spawn(int argc, char *argv[])
 {
 	DytGuidance *instance = new DytGuidance();
@@ -976,6 +949,14 @@ int DytGuidance::task_spawn(int argc, char *argv[])
 	return PX4_ERROR;
 }
 
+/**
+ * @brief 分发模块自定义命令行命令。
+ *
+ * @param argc 命令参数个数。
+ * @param argv 命令参数数组。
+ * @return 命令处理成功时返回 PX4_OK，否则返回 usage 的结果。
+ * 功能：支持 `status`、`retrigger` 等运行时命令。
+ */
 int DytGuidance::custom_command(int argc, char *argv[])
 {
 	if (!is_running()) {
@@ -995,6 +976,13 @@ int DytGuidance::custom_command(int argc, char *argv[])
 	return print_usage("unknown command");
 }
 
+/**
+ * @brief 打印模块帮助文本和命令用法。
+ *
+ * @param reason 可选原因，会在帮助文本前打印；可以为 nullptr。
+ * @return 打印完成后固定返回 0。
+ * 功能：为模块启动和使用提供命令行说明。
+ */
 int DytGuidance::print_usage(const char *reason)
 {
 	if (reason != nullptr) {
@@ -1017,6 +1005,14 @@ and publishes offboard trajectory setpoints for follow and intercept behaviors.
 	return 0;
 }
 
+/**
+ * @brief 供 PX4 shell 调用的模块 C 入口函数。
+ *
+ * @param argc 命令行参数个数。
+ * @param argv 命令行参数数组。
+ * @return 返回 `DytGuidance::main` 的执行结果。
+ * 功能：将 PX4 shell 的调用转发到 C++ 模块框架入口。
+ */
 extern "C" __EXPORT int dyt_guidance_main(int argc, char *argv[])
 {
 	return DytGuidance::main(argc, argv);

@@ -1,0 +1,8 @@
+#!/bin/sh
+#
+# DYT serial camera integration for Pixhawk 6C.
+# Assumes the camera is connected to TEL2, which maps to /dev/ttyS3 on fmu-v6c.
+#
+
+dyt_gimbal start -d /dev/ttyS3
+dyt_guidance start
