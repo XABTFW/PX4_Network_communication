@@ -11,6 +11,8 @@ uint8 CMD_ELECT_LOCK = 7
 uint8 CMD_ELECT_UNLOCK = 8
 uint8 CMD_LOCK_VIEW = 9
 uint8 CMD_CENTER_GIMBAL = 10
+uint8 CMD_SET_FRAME_ANGLE = 11
+uint8 CMD_SEARCH_RATE = 12
 
 uint8 command
 int16 param_x

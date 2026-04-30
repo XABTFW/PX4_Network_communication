@@ -19,6 +19,7 @@
 #include <uORB/topics/dyt_guidance_status.h>
 #include <uORB/topics/dyt_target.h>
 #include <uORB/topics/manual_control_setpoint.h>
+#include <uORB/topics/manual_control_switches.h>
 #include <uORB/topics/offboard_control_mode.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/trajectory_setpoint.h>
@@ -55,7 +56,16 @@ private:
 	static constexpr int OBS_BUFFER_LEN{6};
 	static constexpr float TARGET_MIN_BBOX_PX{4.f};
 	static constexpr float TARGET_MAX_LOS_RAD{0.45f};
-	static constexpr float TARGET_MAX_GIMBAL_YAW_RAD{1.22f};
+	static constexpr float TARGET_MAX_GIMBAL_YAW_RAD{1.92f};
+	static constexpr int SEARCH_CENTER_PASSES{2};
+	static constexpr hrt_abstime MANUAL_TAKEOVER_GRACE{500_ms};
+
+	struct ScanArea {
+		float yaw_min_deg{0.f};
+		float yaw_max_deg{0.f};
+		float pitch_top_deg{0.f};
+		float pitch_bottom_deg{0.f};
+	};
 
 	struct LosObservation {
 		hrt_abstime sample_time{0};
@@ -80,6 +90,11 @@ private:
 		Abort = dyt_guidance_status_s::STATE_ABORT
 	};
 
+	enum class ScanRegion : uint8_t {
+		Center,
+		Global
+	};
+
 	void Run() override;
 
 	void update_subscriptions();
@@ -87,6 +102,8 @@ private:
 
 	float aux_value(int index) const;
 	bool aux_switch_active(int index) const;
+	bool payload_switch_active() const;
+	bool activation_requested() const;
 	bool preconditions_ok() const;
 	bool manual_takeover_detected() const;
 
@@ -104,24 +121,35 @@ private:
 	void publish_status();
 
 	void enter_state(TaskState new_state, uint8_t lost_reason = dyt_guidance_status_s::LOST_REASON_NONE);
-	void activate_guidance();
+	void activate_guidance(hrt_abstime now);
 	void deactivate_guidance(uint8_t lost_reason);
 	void abort_guidance(uint8_t lost_reason);
 	void enter_lost_hold(uint8_t lost_reason);
-	void update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_time = 0);
+	bool update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_time = 0);
 	void update_payload_only_reacquire(hrt_abstime now);
 
 	bool target_locked() const;
 	bool target_geometry_valid(const dyt_target_s &target) const;
 	bool target_geometry_valid() const;
+	bool target_hint_detected() const;
 	bool target_fresh() const;
+	bool target_lock_candidate() const;
 	bool target_usable() const;
 	bool intercept_allowed() const;
 
 	TrackProfile follow_profile() const;
 	TrackProfile intercept_profile() const;
 
-	void send_dyt_command(uint8_t command, int16_t param_x = 0);
+	void send_dyt_command(uint8_t command, int16_t param_x = 0, int16_t param_y = 0, uint8_t param3 = 0, int8_t zoom_rate = 0);
+	void retry_autolock(hrt_abstime now);
+	bool update_hint_autolock(hrt_abstime now);
+	bool handle_lock_candidate_or_timeout(hrt_abstime now);
+	void reset_search_scan(hrt_abstime now);
+	void update_search_scan(hrt_abstime now);
+	void advance_search_scan_area(float pitch_step_deg);
+	void send_scan_angle(float yaw_deg, float pitch_deg);
+	int scan_row_count(const ScanArea &area, float pitch_step_deg) const;
+	ScanArea active_scan_area() const;
 
 	TaskState _state{TaskState::Idle};
 	uint8_t _lost_reason{dyt_guidance_status_s::LOST_REASON_NONE};
@@ -133,13 +161,27 @@ private:
 	bool _payload_lost_hold{false};
 	int _lock_streak{0};
 	int _relock_streak{0};
+	int _lost_streak{0};
+	ScanRegion _scan_region{ScanRegion::Center};
+	int _scan_center_passes{0};
+	int _scan_row{0};
+	float _scan_segment_target_deg{NAN};
 
 	hrt_abstime _state_enter_time{0};
 	hrt_abstime _payload_lost_enter_time{0};
 	hrt_abstime _last_offboard_request{0};
 	hrt_abstime _last_retrigger_time{0};
+	hrt_abstime _last_hint_lock_time{0};
+	hrt_abstime _search_pause_until{0};
+	hrt_abstime _next_scan_time{0};
 	hrt_abstime _last_command_time{0};
+	hrt_abstime _candidate_lock_start_time{0};
+	hrt_abstime _candidate_ignore_until{0};
+	hrt_abstime _candidate_ignored_sample_time{0};
+	bool _candidate_lock_active{false};
 	uint32_t _command_pub_count{0};
+	float _scan_yaw_deg{0.f};
+	float _scan_pitch_deg{0.f};
 
 	LosObservation _observations[OBS_BUFFER_LEN]{};
 	int _observation_count{0};
@@ -152,6 +194,7 @@ private:
 	vehicle_status_s _vehicle_status{};
 	vehicle_angular_velocity_s _vehicle_angular_velocity{};
 	manual_control_setpoint_s _manual_control{};
+	manual_control_switches_s _manual_switches{};
 
 	Vector3f _hold_position{};
 	float _hold_yaw{0.f};
@@ -174,6 +217,7 @@ private:
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
 	uORB::Subscription _manual_control_sub{ORB_ID(manual_control_setpoint)};
+	uORB::Subscription _manual_switches_sub{ORB_ID(manual_control_switches)};
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
 
 	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
@@ -190,6 +234,12 @@ private:
 		(ParamInt<px4::params::DYTG_RELOCKN>) _param_relock_frames,
 		(ParamInt<px4::params::DYTG_WAITMS>) _param_wait_ms,
 		(ParamInt<px4::params::DYTG_LOSTMS>) _param_lost_ms,
+		(ParamFloat<px4::params::DYTG_SC_YSPD>) _param_scan_yaw_speed,
+		(ParamFloat<px4::params::DYTG_SC_PSPD>) _param_scan_pitch_speed,
+		(ParamFloat<px4::params::DYTG_SC_STEP>) _param_scan_pitch_step,
+		(ParamFloat<px4::params::DYTG_SC_PAUSE>) _param_scan_edge_pause,
+		(ParamFloat<px4::params::DYTG_SC_YSTP>) _param_scan_yaw_step,
+		(ParamFloat<px4::params::DYTG_SC_DWEL>) _param_scan_dwell,
 		(ParamInt<px4::params::DYTG_CTRMS>) _param_center_ms,
 		(ParamInt<px4::params::DYTG_RTRYMS>) _param_retry_ms,
 		(ParamFloat<px4::params::DYTG_DLY_MS>) _param_delay_ms,
@@ -248,8 +298,15 @@ void DytGuidance::show_status()
 	PX4_INFO("payload lock seen: %d", _payload_lock_seen);
 	PX4_INFO("payload lost hold: %d", _payload_lost_hold);
 	PX4_INFO("preconditions ok: %d", preconditions_ok());
-	PX4_INFO("activation request: %d", aux_switch_active(_param_act_aux.get()));
+	PX4_INFO("activation request: %d", activation_requested());
 	PX4_INFO("activation aux value: %.2f", static_cast<double>(aux_value(_param_act_aux.get())));
+	PX4_INFO("payload switch: %u", static_cast<unsigned>(_manual_switches.payload_power_switch));
+	PX4_INFO("manual valid: %u roll=%.2f pitch=%.2f yaw=%.2f sticks=%u",
+		 static_cast<unsigned>(_manual_control.valid),
+		 static_cast<double>(_manual_control.roll),
+		 static_cast<double>(_manual_control.pitch),
+		 static_cast<double>(_manual_control.yaw),
+		 static_cast<unsigned>(_manual_control.sticks_moving));
 	PX4_INFO("activation aux: %ld", static_cast<long>(_param_act_aux.get()));
 	PX4_INFO("intercept aux: %ld", static_cast<long>(_param_int_aux.get()));
 	PX4_INFO("command pubs: %lu", static_cast<unsigned long>(_command_pub_count));
@@ -274,6 +331,7 @@ void DytGuidance::update_subscriptions()
 	_vehicle_status_sub.update(&_vehicle_status);
 	_vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity);
 	_manual_control_sub.update(&_manual_control);
+	_manual_switches_sub.update(&_manual_switches);
 
 	dyt_target_s target{};
 
@@ -301,6 +359,16 @@ bool DytGuidance::aux_switch_active(int index) const
 {
 	const float value = aux_value(index);
 	return PX4_ISFINITE(value) && value > 0.5f;
+}
+
+bool DytGuidance::payload_switch_active() const
+{
+	return _manual_switches.payload_power_switch == manual_control_switches_s::SWITCH_POS_ON;
+}
+
+bool DytGuidance::activation_requested() const
+{
+	return aux_switch_active(_param_act_aux.get()) || payload_switch_active();
 }
 
 bool DytGuidance::preconditions_ok() const
@@ -494,6 +562,15 @@ bool DytGuidance::target_geometry_valid() const
 	return _have_target && target_geometry_valid(_last_target);
 }
 
+bool DytGuidance::target_hint_detected() const
+{
+	const bool bbox_valid = PX4_ISFINITE(_last_target.bbox_width_px) && PX4_ISFINITE(_last_target.bbox_height_px)
+				&& _last_target.bbox_width_px >= TARGET_MIN_BBOX_PX
+				&& _last_target.bbox_height_px >= TARGET_MIN_BBOX_PX;
+
+	return _have_target && _last_target.auto_hint && target_fresh() && bbox_valid;
+}
+
 bool DytGuidance::target_fresh() const
 {
 	if (!_have_target || _last_target.timestamp_sample == 0) {
@@ -506,6 +583,39 @@ bool DytGuidance::target_fresh() const
 
 	return age_ok && gap_ok && _last_target.tracking_state != dyt_target_s::TRACKING_STATE_TIMEOUT
 	       && _last_target.tracking_state != dyt_target_s::TRACKING_STATE_ERROR;
+}
+
+bool DytGuidance::target_lock_candidate() const
+{
+	if (!_have_target || _last_target.timestamp_sample == 0) {
+		return false;
+	}
+
+	const float age_s = (hrt_absolute_time() - _last_target.timestamp_sample) * 1e-6f;
+
+	if (age_s > 0.3f) {
+		return false;
+	}
+
+	if (_last_target.tracking_state == dyt_target_s::TRACKING_STATE_TIMEOUT ||
+	    _last_target.tracking_state == dyt_target_s::TRACKING_STATE_ERROR) {
+		return false;
+	}
+
+	const bool bbox_valid = PX4_ISFINITE(_last_target.bbox_width_px)
+				&& PX4_ISFINITE(_last_target.bbox_height_px)
+				&& _last_target.bbox_width_px >= TARGET_MIN_BBOX_PX
+				&& _last_target.bbox_height_px >= TARGET_MIN_BBOX_PX;
+
+	if (target_locked()) {
+		return true;
+	}
+
+	if (_last_target.auto_hint && bbox_valid) {
+		return true;
+	}
+
+	return false;
 }
 
 bool DytGuidance::target_usable() const
@@ -720,27 +830,55 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 	if (new_state == TaskState::SearchWaitLock) {
 		_lock_streak = 0;
 		_relock_streak = 0;
+		_last_hint_lock_time = 0;
+	} else if (new_state == TaskState::TrackFollow || new_state == TaskState::TrackIntercept) {
+		_next_scan_time = 0;
+		_search_pause_until = 0;
+		_lost_streak = 0;
+		_candidate_lock_active = false;
+		_candidate_lock_start_time = 0;
+		_candidate_ignore_until = 0;
+		_candidate_ignored_sample_time = 0;
 	} else if (new_state == TaskState::LostHold) {
 		_relock_streak = 0;
 		_last_retrigger_time = 0;
+		_last_hint_lock_time = 0;
+		_candidate_lock_active = false;
+		_candidate_lock_start_time = 0;
+		_candidate_ignore_until = 0;
+		_candidate_ignored_sample_time = 0;
 		clear_observations();
 		capture_hold_setpoint();
 		send_dyt_command(dyt_command_s::CMD_CENTER_GIMBAL);
+		reset_search_scan(_state_enter_time);
 	} else if (new_state == TaskState::Idle) {
 		clear_observations();
 		_velocity_sp.zero();
 		_acceleration_sp.zero();
 		_yaw_sp = NAN;
 		_yaw_rate_sp = NAN;
+		_next_scan_time = 0;
+		_candidate_lock_active = false;
+		_candidate_lock_start_time = 0;
+		_candidate_ignore_until = 0;
+		_candidate_ignored_sample_time = 0;
+	} else if (new_state == TaskState::Abort) {
+		_candidate_lock_active = false;
+		_candidate_lock_start_time = 0;
+		_candidate_ignore_until = 0;
+		_candidate_ignored_sample_time = 0;
 	}
 }
 
-void DytGuidance::activate_guidance()
+void DytGuidance::activate_guidance(hrt_abstime now)
 {
 	_payload_lock_seen = false;
 	_payload_lost_hold = false;
 	_payload_lost_enter_time = 0;
-	_last_retrigger_time = 0;
+	_last_retrigger_time = now;
+	_last_hint_lock_time = 0;
+	_search_pause_until = 0;
+	_next_scan_time = 0;
 	send_dyt_command(dyt_command_s::CMD_AUTO_LOCK, -100);
 
 	if (!preconditions_ok()) {
@@ -760,6 +898,9 @@ void DytGuidance::deactivate_guidance(uint8_t lost_reason)
 	_payload_lost_hold = false;
 	_payload_lost_enter_time = 0;
 	_last_retrigger_time = 0;
+	_last_hint_lock_time = 0;
+	_search_pause_until = 0;
+	_next_scan_time = 0;
 	send_dyt_command(dyt_command_s::CMD_STOP_TRACK);
 
 	if (_state != TaskState::Idle) {
@@ -778,23 +919,17 @@ void DytGuidance::enter_lost_hold(uint8_t lost_reason)
 	enter_state(TaskState::LostHold, lost_reason);
 }
 
-void DytGuidance::update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_time)
+bool DytGuidance::update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_time)
 {
 	const hrt_abstime enter_time = lost_enter_time > 0 ? lost_enter_time : _state_enter_time;
 	const int32_t center_ms = math::max(_param_center_ms.get(), int32_t{0});
 	const hrt_abstime center_delay = static_cast<hrt_abstime>(center_ms) * 1000ULL;
 
 	if ((now - enter_time) < center_delay) {
-		return;
+		return true;
 	}
 
-	const int32_t retry_ms = math::max(_param_retry_ms.get(), int32_t{100});
-	const hrt_abstime retry_interval = static_cast<hrt_abstime>(retry_ms) * 1000ULL;
-
-	if (_last_retrigger_time == 0 || (now - _last_retrigger_time) >= retry_interval) {
-		send_dyt_command(dyt_command_s::CMD_RETRIGGER, -100);
-		_last_retrigger_time = now;
-	}
+	return false;
 }
 
 void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
@@ -804,6 +939,8 @@ void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
 		_payload_lost_hold = false;
 		_payload_lost_enter_time = 0;
 		_last_retrigger_time = 0;
+		_next_scan_time = 0;
+		_search_pause_until = 0;
 		return;
 	}
 
@@ -815,23 +952,277 @@ void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
 		_payload_lost_hold = true;
 		_payload_lost_enter_time = now;
 		_last_retrigger_time = 0;
+		_last_hint_lock_time = 0;
+		_search_pause_until = 0;
 		clear_observations();
 		send_dyt_command(dyt_command_s::CMD_CENTER_GIMBAL);
+		reset_search_scan(now);
 	}
 
-	update_lost_reacquire(now, _payload_lost_enter_time);
+	if (!update_lost_reacquire(now, _payload_lost_enter_time)) {
+		update_search_scan(now);
+	}
 }
 
-void DytGuidance::send_dyt_command(uint8_t command, int16_t param_x)
+void DytGuidance::send_dyt_command(uint8_t command, int16_t param_x, int16_t param_y, uint8_t param3, int8_t zoom_rate)
 {
 	dyt_command_s msg{};
 	msg.timestamp = hrt_absolute_time();
 	msg.command = command;
 	msg.param_x = param_x;
+	msg.param_y = param_y;
+	msg.param3 = param3;
+	msg.zoom_rate = zoom_rate;
 	_dyt_command_pub.publish(msg);
 	_last_command = command;
 	_last_command_time = msg.timestamp;
 	++_command_pub_count;
+}
+
+void DytGuidance::retry_autolock(hrt_abstime now)
+{
+	const int32_t retry_ms = math::max(_param_retry_ms.get(), int32_t{100});
+	const hrt_abstime retry_interval = static_cast<hrt_abstime>(retry_ms) * 1000ULL;
+
+	if (_last_retrigger_time == 0 || (now - _last_retrigger_time) >= retry_interval) {
+		send_dyt_command(dyt_command_s::CMD_AUTO_LOCK, -100);
+		_last_retrigger_time = now;
+	}
+}
+
+bool DytGuidance::update_hint_autolock(hrt_abstime now)
+{
+	if (!target_lock_candidate()) {
+		return false;
+	}
+
+	// 已经 LOCKED 时，不重复发锁定命令，但告诉外层：目标存在，应该停止搜索
+	if (target_locked()) {
+		return true;
+	}
+
+	const int32_t retry_ms = math::max(_param_retry_ms.get(), int32_t{100});
+	const hrt_abstime retry_interval = static_cast<hrt_abstime>(retry_ms) * 1000ULL;
+
+	if (_last_hint_lock_time == 0 || (now - _last_hint_lock_time) >= retry_interval) {
+		send_dyt_command(dyt_command_s::CMD_AUTO_LOCK, -100);
+		_last_hint_lock_time = now;
+		_last_retrigger_time = now;
+		return true;
+	}
+
+	// 虽然没到重发时间，但目标候选仍然存在，所以外层必须停止搜索
+	return true;
+}
+
+bool DytGuidance::handle_lock_candidate_or_timeout(hrt_abstime now)
+{
+	constexpr hrt_abstime LOCK_CANDIDATE_MAX_HOLD = 1200_ms;
+	constexpr hrt_abstime SCAN_UPDATE_DELAY = 100_ms;
+	constexpr hrt_abstime CANDIDATE_COOLDOWN = 800_ms;
+
+	if (!target_lock_candidate()) {
+		_candidate_lock_active = false;
+		_candidate_lock_start_time = 0;
+		return false;
+	}
+
+	// 候选刚超时过，在冷却期内不要再拦截搜索
+	// 除非来了新的 target sample
+	if (_candidate_ignore_until > now &&
+	    _last_target.timestamp_sample == _candidate_ignored_sample_time) {
+		return false;
+	}
+
+	if (!_candidate_lock_active) {
+		_candidate_lock_active = true;
+		_candidate_lock_start_time = now;
+	}
+
+	const hrt_abstime held_time = now - _candidate_lock_start_time;
+
+	if (held_time < LOCK_CANDIDATE_MAX_HOLD) {
+		update_hint_autolock(now);
+		_search_pause_until = now + LOCK_CANDIDATE_MAX_HOLD;
+		_next_scan_time = now + SCAN_UPDATE_DELAY;
+		_scan_segment_target_deg = NAN;
+		return true;
+	}
+
+	// 候选等待超时：允许搜索继续，不要立刻重新拦截
+	_candidate_lock_active = false;
+	_candidate_lock_start_time = 0;
+	_candidate_ignore_until = now + CANDIDATE_COOLDOWN;
+	_candidate_ignored_sample_time = _last_target.timestamp_sample;
+	_last_hint_lock_time = 0;
+	_search_pause_until = 0;
+
+	return false;
+}
+
+void DytGuidance::reset_search_scan(hrt_abstime now)
+{
+	_scan_region = ScanRegion::Center;
+	_scan_center_passes = 0;
+	_scan_row = 0;
+	_scan_yaw_deg = 0.f;
+	_scan_pitch_deg = 0.f;
+	_scan_segment_target_deg = NAN;
+	_search_pause_until = 0;
+
+	const int32_t center_ms = math::max(_param_center_ms.get(), int32_t{0});
+	_next_scan_time = now + static_cast<hrt_abstime>(center_ms) * 1000ULL;
+}
+
+int DytGuidance::scan_row_count(const ScanArea &area, float pitch_step_deg) const
+{
+	const float step_deg = (PX4_ISFINITE(pitch_step_deg) && pitch_step_deg > 0.f) ? pitch_step_deg : 10.f;
+	const float pitch_span = math::max(area.pitch_top_deg - area.pitch_bottom_deg, 0.f);
+	return static_cast<int>(floorf(pitch_span / step_deg)) + 1;
+}
+
+DytGuidance::ScanArea DytGuidance::active_scan_area() const
+{
+	if (_scan_region == ScanRegion::Center) {
+		return {-60.f, 60.f, 30.f, -20.f};
+	}
+
+	return {-110.f, 110.f, 40.f, -100.f};
+}
+
+void DytGuidance::advance_search_scan_area(float pitch_step_deg)
+{
+	if (_scan_row < scan_row_count(active_scan_area(), pitch_step_deg)) {
+		return;
+	}
+
+	_scan_row = 0;
+
+	if (_scan_region == ScanRegion::Center) {
+		++_scan_center_passes;
+
+		if (_scan_center_passes >= SEARCH_CENTER_PASSES) {
+			_scan_center_passes = 0;
+			_scan_region = ScanRegion::Global;
+		}
+
+	} else {
+		_scan_region = ScanRegion::Center;
+		_scan_center_passes = 0;
+	}
+}
+
+void DytGuidance::send_scan_angle(float yaw_deg, float pitch_deg)
+{
+	const float yaw_limited = math::constrain(yaw_deg, -110.f, 110.f);
+	const float pitch_limited = math::constrain(pitch_deg, -100.f, 40.f);
+	const int16_t yaw_cmd = static_cast<int16_t>(roundf(yaw_limited * 100.f));
+	const int16_t pitch_cmd = static_cast<int16_t>(roundf(pitch_limited * 100.f));
+
+	send_dyt_command(dyt_command_s::CMD_SET_FRAME_ANGLE, yaw_cmd, pitch_cmd);
+}
+
+void DytGuidance::update_search_scan(hrt_abstime now)
+{
+	constexpr float SCAN_UPDATE_INTERVAL_S = 0.10f;
+
+	// 已经 LOCKED 且新鲜，才真正禁止搜索
+	if (target_locked() && target_fresh()) {
+		_next_scan_time = now + static_cast<hrt_abstime>(SCAN_UPDATE_INTERVAL_S * 1e6f);
+		_search_pause_until = now + 300_ms;
+		_scan_segment_target_deg = NAN;
+		return;
+	}
+
+	// 只是候选目标：触发锁定，但不要永久挡住搜索
+	if (target_lock_candidate()) {
+		update_hint_autolock(now);
+
+		if (_last_hint_lock_time != 0 && (now - _last_hint_lock_time) < 300_ms) {
+			_next_scan_time = now + static_cast<hrt_abstime>(SCAN_UPDATE_INTERVAL_S * 1e6f);
+			return;
+		}
+
+		// 注意：这里不要 return，让搜索逻辑继续执行
+	}
+
+	if (_next_scan_time == 0) {
+		reset_search_scan(now);
+	}
+
+	if (now < _next_scan_time) {
+		return;
+	}
+
+	if (_search_pause_until > now) {
+		_next_scan_time = now + static_cast<hrt_abstime>(SCAN_UPDATE_INTERVAL_S * 1e6f);
+		return;
+	}
+
+	const float pitch_step_deg = math::constrain(_param_scan_pitch_step.get(), 1.f, 30.f);
+	advance_search_scan_area(pitch_step_deg);
+
+	const ScanArea area = active_scan_area();
+	const bool forward = (_scan_row % 2) == 0;
+	const float row_end_deg = forward ? area.yaw_max_deg : area.yaw_min_deg;
+	float pitch_deg = area.pitch_top_deg - static_cast<float>(_scan_row) * pitch_step_deg;
+
+	if (pitch_deg < area.pitch_bottom_deg) {
+		pitch_deg = area.pitch_bottom_deg;
+	}
+
+	const float yaw_speed_deg_s = math::constrain(_param_scan_yaw_speed.get(), 0.1f, 90.f);
+	const float edge_pause_s = math::constrain(_param_scan_edge_pause.get(), 0.f, 2.f);
+	const float yaw_step_deg = math::constrain(_param_scan_yaw_step.get(), 5.f, 60.f);
+	const float dwell_s = math::constrain(_param_scan_dwell.get(), 0.1f, 2.f);
+
+	float current_yaw_deg = _scan_yaw_deg;
+
+	if (_have_target && target_fresh() && PX4_ISFINITE(_last_target.gimbal_yaw_rad)) {
+		current_yaw_deg = math::degrees(_last_target.gimbal_yaw_rad);
+	}
+
+	if (!PX4_ISFINITE(_scan_segment_target_deg)) {
+		if (fabsf(row_end_deg - current_yaw_deg) <= yaw_step_deg * 0.5f) {
+			++_scan_row;
+			advance_search_scan_area(pitch_step_deg);
+			_scan_segment_target_deg = NAN;
+			_search_pause_until = now + static_cast<hrt_abstime>(edge_pause_s * 1e6f);
+			_scan_yaw_deg = current_yaw_deg;
+			_next_scan_time = now + static_cast<hrt_abstime>(SCAN_UPDATE_INTERVAL_S * 1e6f);
+			return;
+		}
+
+		if (forward) {
+			_scan_segment_target_deg = math::min(current_yaw_deg + yaw_step_deg, row_end_deg);
+		} else {
+			_scan_segment_target_deg = math::max(current_yaw_deg - yaw_step_deg, row_end_deg);
+		}
+	}
+
+	const float target_yaw = _scan_segment_target_deg;
+	const float travel_deg = fabsf(target_yaw - current_yaw_deg);
+	const float travel_s = (yaw_speed_deg_s > 0.1f) ? (travel_deg / yaw_speed_deg_s) : 1.f;
+
+	send_scan_angle(target_yaw, pitch_deg);
+
+	const bool at_row_end = fabsf(target_yaw - row_end_deg) < 1.f;
+
+	if (at_row_end) {
+		_scan_segment_target_deg = NAN;
+	} else {
+		if (forward) {
+			_scan_segment_target_deg = math::min(target_yaw + yaw_step_deg, row_end_deg);
+		} else {
+			_scan_segment_target_deg = math::max(target_yaw - yaw_step_deg, row_end_deg);
+		}
+	}
+
+	const float wait_s = travel_s + dwell_s;
+	_search_pause_until = now + static_cast<hrt_abstime>(wait_s * 1e6f);
+	_scan_yaw_deg = target_yaw;
+	_scan_pitch_deg = pitch_deg;
+	_next_scan_time = now + static_cast<hrt_abstime>(SCAN_UPDATE_INTERVAL_S * 1e6f);
 }
 
 void DytGuidance::Run()
@@ -846,11 +1237,11 @@ void DytGuidance::Run()
 	update_subscriptions();
 
 	const hrt_abstime now = hrt_absolute_time();
-	const bool activation_request = aux_switch_active(_param_act_aux.get());
+	const bool activation_request = activation_requested();
 	const bool intercept_request = aux_switch_active(_param_int_aux.get());
 
 	if (activation_request && !_prev_activation_request) {
-		activate_guidance();
+		activate_guidance(now);
 	}
 
 	if (!activation_request && _prev_activation_request) {
@@ -868,7 +1259,7 @@ void DytGuidance::Run()
 	if (_state != TaskState::Idle && _state != TaskState::Abort) {
 		if (!preconditions_ok()) {
 			abort_guidance(dyt_guidance_status_s::LOST_REASON_PRECONDITION);
-		} else if (manual_takeover_detected()) {
+		} else if ((now - _state_enter_time) > MANUAL_TAKEOVER_GRACE && manual_takeover_detected()) {
 			abort_guidance(dyt_guidance_status_s::LOST_REASON_MANUAL);
 		}
 	}
@@ -888,6 +1279,14 @@ void DytGuidance::Run()
 		} else {
 			_lock_streak = 0;
 
+			if (target_lock_candidate()) {
+				update_hint_autolock(now);
+				_search_pause_until = now + 1200_ms;
+				_next_scan_time = now + 100_ms;
+			} else {
+				retry_autolock(now);
+			}
+
 			if ((now - _state_enter_time) > static_cast<hrt_abstime>(_param_wait_ms.get()) * 1000ULL) {
 				enter_lost_hold(dyt_guidance_status_s::LOST_REASON_TIMEOUT);
 			}
@@ -896,19 +1295,37 @@ void DytGuidance::Run()
 
 	case TaskState::TrackFollow:
 		if (!target_usable()) {
-			enter_lost_hold(target_locked() ? dyt_guidance_status_s::LOST_REASON_STALE :
-					 dyt_guidance_status_s::LOST_REASON_TRACKING);
-		} else if (intercept_request && intercept_allowed()) {
-			enter_state(TaskState::TrackIntercept);
+			++_lost_streak;
+
+			if (_lost_streak >= _param_relock_frames.get()) {
+				enter_lost_hold(target_locked() ? dyt_guidance_status_s::LOST_REASON_STALE :
+						 dyt_guidance_status_s::LOST_REASON_TRACKING);
+			}
+
+		} else {
+			_lost_streak = 0;
+
+			if (intercept_request && intercept_allowed()) {
+				enter_state(TaskState::TrackIntercept);
+			}
 		}
 		break;
 
 	case TaskState::TrackIntercept:
 		if (!target_usable()) {
-			enter_lost_hold(target_locked() ? dyt_guidance_status_s::LOST_REASON_STALE :
-					 dyt_guidance_status_s::LOST_REASON_TRACKING);
-		} else if (!intercept_request || !intercept_allowed()) {
-			enter_state(TaskState::TrackFollow);
+			++_lost_streak;
+
+			if (_lost_streak >= _param_relock_frames.get()) {
+				enter_lost_hold(target_locked() ? dyt_guidance_status_s::LOST_REASON_STALE :
+						 dyt_guidance_status_s::LOST_REASON_TRACKING);
+			}
+
+		} else {
+			_lost_streak = 0;
+
+			if (!intercept_request || !intercept_allowed()) {
+				enter_state(TaskState::TrackFollow);
+			}
 		}
 		break;
 
@@ -923,10 +1340,21 @@ void DytGuidance::Run()
 		} else {
 			_relock_streak = 0;
 
-			if ((now - _state_enter_time) > static_cast<hrt_abstime>(_param_lost_ms.get()) * 1000ULL) {
+			const int32_t center_ms = math::max(_param_center_ms.get(), int32_t{0});
+			const hrt_abstime center_delay = static_cast<hrt_abstime>(center_ms) * 1000ULL;
+			const hrt_abstime lost_timeout = static_cast<hrt_abstime>(math::max(_param_lost_ms.get(), int32_t{0})) * 1000ULL;
+			const bool center_done = (now - _state_enter_time) >= center_delay;
+
+			// 建议：DYTG_LOSTMS=0 时不要自动停止搜索
+			if (center_done && lost_timeout > 0 && (now - _state_enter_time) > center_delay + lost_timeout) {
 				abort_guidance(_lost_reason);
-			} else {
-				update_lost_reacquire(now);
+			} else if (center_done) {
+				update_search_scan(now);
+
+				// 只有没有候选目标时才普通 retry
+				if (!target_lock_candidate()) {
+					retry_autolock(now);
+				}
 			}
 		}
 		break;

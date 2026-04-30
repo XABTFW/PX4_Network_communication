@@ -911,12 +911,14 @@ void DytGimbal::send_protocol_command(const dyt_command_s &cmd)
 {
 	switch (cmd.command) {
 	case dyt_command_s::CMD_AUTO_LOCK: {
+			const int16_t param_x = (cmd.param_x != 0) ? cmd.param_x : -100;
 			send_command_frame(0x07, 0, 0, 0, 0);
-			send_command_frame(0x0F, cmd.param_x, cmd.param_y, cmd.param3, cmd.zoom_rate);
+			send_command_frame(0x0F, param_x, cmd.param_y, cmd.param3, cmd.zoom_rate);
 		}
 		break;
 
 	case dyt_command_s::CMD_STOP_TRACK:
+		send_command_frame(0x24, 0, 0, 0, 0);
 		send_command_frame(0x0E, cmd.param_x, cmd.param_y, cmd.param3, cmd.zoom_rate);
 		break;
 
@@ -947,15 +949,25 @@ void DytGimbal::send_protocol_command(const dyt_command_s &cmd)
 		break;
 
 	case dyt_command_s::CMD_CENTER_GIMBAL:
+		send_command_frame(0x24, 0, 0, 0, 0);
 		send_command_frame(0x0E, 0, 0, 0, 0);
 		usleep(CENTER_SEQUENCE_DELAY_US);
 		send_command_frame(0x26, cmd.param_x, cmd.param_y, cmd.param3, cmd.zoom_rate);
 		break;
 
+	case dyt_command_s::CMD_SET_FRAME_ANGLE:
+		send_command_frame(0x26, cmd.param_x, cmd.param_y, cmd.param3, cmd.zoom_rate);
+		break;
+
+	case dyt_command_s::CMD_SEARCH_RATE:
+		send_command_frame(0x24, cmd.param_x, cmd.param_y, cmd.param3, cmd.zoom_rate);
+		break;
+
 	case dyt_command_s::CMD_RETRIGGER:
+		send_command_frame(0x24, 0, 0, 0, 0);
 		send_command_frame(0x0E, 0, 0, 0, 0);
 		send_command_frame(0x07, 0, 0, 0, 0);
-		send_command_frame(0x0F, cmd.param_x, cmd.param_y, cmd.param3, cmd.zoom_rate);
+		send_command_frame(0x0F, (cmd.param_x != 0) ? cmd.param_x : -100, cmd.param_y, cmd.param3, cmd.zoom_rate);
 		break;
 
 	default:

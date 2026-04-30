@@ -43,7 +43,7 @@ PARAM_DEFINE_FLOAT(DYTG_STK_TK, 0.30f);
  * @max 20
  * @group DYT Guidance
  */
-PARAM_DEFINE_INT32(DYTG_LOCK_N, 3);
+PARAM_DEFINE_INT32(DYTG_LOCK_N, 1);
 
 /**
  * Consecutive lock frames to recover from lost hold
@@ -52,7 +52,7 @@ PARAM_DEFINE_INT32(DYTG_LOCK_N, 3);
  * @max 20
  * @group DYT Guidance
  */
-PARAM_DEFINE_INT32(DYTG_RELOCKN, 3);
+PARAM_DEFINE_INT32(DYTG_RELOCKN, 1);
 
 /**
  * Search wait timeout
@@ -65,14 +65,80 @@ PARAM_DEFINE_INT32(DYTG_RELOCKN, 3);
 PARAM_DEFINE_INT32(DYTG_WAITMS, 1500);
 
 /**
- * Lost hold timeout
+ * Lost hold/search timeout
  *
  * @unit ms
  * @min 100
- * @max 20000
+ * @max 600000
  * @group DYT Guidance
  */
-PARAM_DEFINE_INT32(DYTG_LOSTMS, 3000);
+PARAM_DEFINE_INT32(DYTG_LOSTMS, 240000);
+
+/**
+ * Search yaw speed
+ *
+ * Gimbal yaw rate used while scanning after target loss.
+ *
+ * @unit deg/s
+ * @min 1
+ * @max 90
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_SC_YSPD, 3.f);
+
+/**
+ * Search pitch speed
+ *
+ * Gimbal pitch rate used while changing scan rows after target loss.
+ *
+ * @unit deg/s
+ * @min 1
+ * @max 90
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_SC_PSPD, 8.f);
+
+/**
+ * Search pitch step
+ *
+ * @unit deg
+ * @min 1
+ * @max 30
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_SC_STEP, 15.f);
+
+/**
+ * Search edge pause
+ *
+ * @unit s
+ * @min 0
+ * @max 2
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_SC_PAUSE, 0.05f);
+
+/**
+ * Search yaw step
+ *
+ * @unit deg
+ * @min 5
+ * @max 60
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_SC_YSTP, 10.f);
+
+/**
+ * Search dwell time
+ *
+ * @unit s
+ * @min 0.1
+ * @max 1.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_SC_DWEL, 0.2f);
 
 /**
  * Gimbal center settle time before relock retry
