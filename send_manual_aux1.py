@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Send MAVLink GCS heartbeat and MANUAL_CONTROL aux1=1000 to PX4 SITL on 14540."""
+"""Send MAVLink GCS heartbeat and MANUAL_CONTROL aux1 to PX4 SITL on 14540."""
 
 import argparse
 import os
@@ -26,7 +26,7 @@ AUX1_EXTENSION_BIT = 1 << 2
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Send GCS heartbeat and MANUAL_CONTROL aux1=1000 to PX4 SITL."
+        description="Send GCS heartbeat and MANUAL_CONTROL aux1 to PX4 SITL."
     )
     parser.add_argument(
         "--connect",
@@ -34,6 +34,13 @@ def parse_args():
         help="MAVLink output endpoint",
     )
     parser.add_argument("--rate", type=float, default=RATE_HZ, help="send rate in Hz")
+    parser.add_argument(
+        "--aux1",
+        type=int,
+        choices=(0, 1),
+        default=1,
+        help="AUX1 switch value to send",
+    )
     parser.add_argument(
         "--heartbeat-timeout",
         type=float,
@@ -105,7 +112,7 @@ def open_default_connection(connect, heartbeat_timeout_s):
         raise SystemExit(1) from exc
 
 
-def send_manual_control(master, target_system):
+def send_manual_control(master, target_system, aux1_value):
     master.mav.manual_control_send(
         target_system,
         0,
@@ -117,7 +124,7 @@ def send_manual_control(master, target_system):
         AUX1_EXTENSION_BIT,
         0,
         0,
-        AUX1_FULL_SCALE,
+        aux1_value,
         0,
         0,
         0,
@@ -145,6 +152,7 @@ def main():
         return 1
 
     master, active_connect, target_system = open_default_connection(args.connect, args.heartbeat_timeout)
+    aux1_mavlink = AUX1_FULL_SCALE if args.aux1 == 1 else 0
     period_s = 1.0 / args.rate
     heartbeat_period_s = 1.0 / HEARTBEAT_RATE_HZ
     next_send_s = time.monotonic()
@@ -153,13 +161,13 @@ def main():
     heartbeat_count = 0
 
     print(
-        f"sending heartbeat + MANUAL_CONTROL to {active_connect} "
+        f"connect={active_connect} "
         f"from sysid={SOURCE_SYSTEM} compid={SOURCE_COMPONENT} "
         f"target_system={target_system} rate={args.rate:.1f}Hz",
         flush=True,
     )
     print(
-        f"x=0 y=0 z={THROTTLE_CENTER} r=0 aux1={AUX1_FULL_SCALE} "
+        f"x=0 y=0 z={THROTTLE_CENTER} r=0 aux1={aux1_mavlink} "
         f"enabled_extensions=0x{AUX1_EXTENSION_BIT:02x}",
         flush=True,
     )
@@ -174,9 +182,13 @@ def main():
                 next_heartbeat_s += heartbeat_period_s
 
             if now_s >= next_send_s:
-                send_manual_control(master, target_system)
+                send_manual_control(master, target_system, aux1_mavlink)
                 sent_count += 1
-                print(f"manual_count={sent_count} heartbeat_count={heartbeat_count}", flush=True)
+                print(
+                    f"sent_count={sent_count} aux1={args.aux1} "
+                    f"enabled_extensions=0x{AUX1_EXTENSION_BIT:02x} heartbeat_count={heartbeat_count}",
+                    flush=True,
+                )
                 next_send_s += period_s
 
                 if next_send_s < time.monotonic() - period_s:
