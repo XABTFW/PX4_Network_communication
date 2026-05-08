@@ -882,7 +882,6 @@ void DytGuidance::activate_guidance(hrt_abstime now)
 	send_dyt_command(dyt_command_s::CMD_AUTO_LOCK, -100);
 
 	if (!preconditions_ok()) {
-		PX4_WARN("DYT guidance preconditions not met, lock command sent only");
 		return;
 	}
 

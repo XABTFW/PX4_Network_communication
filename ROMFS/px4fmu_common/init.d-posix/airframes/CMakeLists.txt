@@ -92,6 +92,8 @@ px4_add_romfs_files(
 	4021_gz_x500_flow
 	4022_gz_fpv_quadtailsitter
 
+	22000_gz_x500_gimbal_dyt
+
 	6011_gazebo-classic_typhoon_h480
 	6011_gazebo-classic_typhoon_h480.post
 

@@ -1,0 +1,16 @@
+#!/bin/sh
+#
+# @name Gazebo x500 gimbal DYT
+#
+# @type Quadrotor
+#
+
+PX4_SIM_MODEL=x500_gimbal
+
+. ${R}etc/init.d-posix/airframes/4019_gz_x500_gimbal
+
+dyt_uart_path="${PX4_DYT_UART_PATH:-/tmp/dyt_px4_${px4_instance}}"
+
+echo "INFO  [init] Starting DYT SITL modules on ${dyt_uart_path}"
+dyt_gimbal start -d "${dyt_uart_path}"
+dyt_guidance start
