@@ -115,6 +115,13 @@ class RosImageToDytSender(Node):
         self.declare_parameter("cx0", -1.0)
         self.declare_parameter("cy0", -1.0)
         self.declare_parameter("min_area", 100.0)
+        self.declare_parameter("h1_low", 0)
+        self.declare_parameter("h1_high", 15)
+        self.declare_parameter("h2_low", 165)
+        self.declare_parameter("h2_high", 180)
+        self.declare_parameter("s_min", 70)
+        self.declare_parameter("v_min", 50)
+        self.declare_parameter("image_timeout_s", 0.3)
 
         self._image_topic = self.get_parameter("image_topic").value
         self._port = self.get_parameter("port").value
@@ -124,6 +131,13 @@ class RosImageToDytSender(Node):
         self._cx0 = float(self.get_parameter("cx0").value)
         self._cy0 = float(self.get_parameter("cy0").value)
         self._min_area = float(self.get_parameter("min_area").value)
+        self._h1_low = int(self.get_parameter("h1_low").value)
+        self._h1_high = int(self.get_parameter("h1_high").value)
+        self._h2_low = int(self.get_parameter("h2_low").value)
+        self._h2_high = int(self.get_parameter("h2_high").value)
+        self._s_min = int(self.get_parameter("s_min").value)
+        self._v_min = int(self.get_parameter("v_min").value)
+        self._image_timeout_s = float(self.get_parameter("image_timeout_s").value)
 
         if self._rate <= 0.0:
             raise ValueError("rate must be greater than 0")
@@ -132,14 +146,19 @@ class RosImageToDytSender(Node):
         self._bridge = CvBridge()
         self._frame_counter = 0
         self._last_send_s = None
+        self._last_image_s = None
         self._tracking_state = TRACKING_STATE_SEARCH
         self._los_x_rad = 0.0
         self._los_y_rad = 0.0
         self._bbox_width_px = 0.0
         self._bbox_height_px = 0.0
         self._bbox_area = 0.0
+        self._contour_count = 0
+        self._max_area = 0.0
 
         self.create_subscription(Image, self._image_topic, self._image_callback, 10)
+        self._mask_pub = self.create_publisher(Image, "/dyt_debug/mask", 10)
+        self._overlay_pub = self.create_publisher(Image, "/dyt_debug/overlay", 10)
         self.create_timer(1.0 / self._rate, self._timer_callback)
 
         self.get_logger().info(
@@ -161,24 +180,33 @@ class RosImageToDytSender(Node):
             self._set_search()
             return
 
+        self._last_image_s = time.monotonic()
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_red_1 = np.array([0, 100, 80], dtype=np.uint8)
-        upper_red_1 = np.array([10, 255, 255], dtype=np.uint8)
-        lower_red_2 = np.array([170, 100, 80], dtype=np.uint8)
-        upper_red_2 = np.array([180, 255, 255], dtype=np.uint8)
+        lower_red_1 = np.array([self._h1_low, self._s_min, self._v_min], dtype=np.uint8)
+        upper_red_1 = np.array([self._h1_high, 255, 255], dtype=np.uint8)
+        lower_red_2 = np.array([self._h2_low, self._s_min, self._v_min], dtype=np.uint8)
+        upper_red_2 = np.array([self._h2_high, 255, 255], dtype=np.uint8)
         mask = cv2.inRange(hsv, lower_red_1, upper_red_1) | cv2.inRange(hsv, lower_red_2, upper_red_2)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        self._contour_count = len(contours)
+        overlay = image.copy()
 
         if not contours:
             self._set_search()
+            self._draw_overlay(overlay, None, None, None, None, False)
+            self._publish_debug_images(mask, overlay, msg.header)
             return
 
         contour = max(contours, key=cv2.contourArea)
         area = float(cv2.contourArea(contour))
+        self._max_area = area
 
         if area <= self._min_area:
+            x, y, w, h = cv2.boundingRect(contour)
             self._set_search(area)
+            self._draw_overlay(overlay, x, y, w, h, False)
+            self._publish_debug_images(mask, overlay, msg.header)
             return
 
         x, y, w, h = cv2.boundingRect(contour)
@@ -195,6 +223,8 @@ class RosImageToDytSender(Node):
         self._bbox_width_px = float(w)
         self._bbox_height_px = float(h)
         self._bbox_area = area
+        self._draw_overlay(overlay, x, y, w, h, True)
+        self._publish_debug_images(mask, overlay, msg.header)
 
     def _set_search(self, area=0.0):
         self._tracking_state = TRACKING_STATE_SEARCH
@@ -204,15 +234,72 @@ class RosImageToDytSender(Node):
         self._bbox_height_px = 0.0
         self._bbox_area = float(area)
 
+        if area == 0.0:
+            self._max_area = 0.0
+
+    def _draw_overlay(self, overlay, x, y, w, h, target_valid):
+        image_h, image_w = overlay.shape[:2]
+        cx0 = self._cx0 if self._cx0 >= 0.0 else float(image_w) * 0.5
+        cy0 = self._cy0 if self._cy0 >= 0.0 else float(image_h) * 0.5
+        image_cx = int(round(cx0))
+        image_cy = int(round(cy0))
+        color = (0, 255, 0) if target_valid else (0, 165, 255)
+
+        if x is not None and y is not None and w is not None and h is not None:
+            target_cx = int(round(x + w * 0.5))
+            target_cy = int(round(y + h * 0.5))
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), color, 2)
+            cv2.circle(overlay, (target_cx, target_cy), 4, color, -1)
+
+        cv2.drawMarker(overlay, (image_cx, image_cy), (255, 0, 0), cv2.MARKER_CROSS, 18, 2)
+        cv2.putText(
+            overlay,
+            f"target_valid={target_valid}",
+            (10, 24),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            overlay,
+            f"bbox_area={self._bbox_area:.1f} los_x_deg={math.degrees(self._los_x_rad):+.2f} "
+            f"los_y_deg={math.degrees(self._los_y_rad):+.2f}",
+            (10, 50),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+            cv2.LINE_AA,
+        )
+
+    def _publish_debug_images(self, mask, overlay, header):
+        mask_msg = self._bridge.cv2_to_imgmsg(mask, encoding="mono8")
+        overlay_msg = self._bridge.cv2_to_imgmsg(overlay, encoding="bgr8")
+        mask_msg.header = header
+        overlay_msg.header = header
+        self._mask_pub.publish(mask_msg)
+        self._overlay_pub.publish(overlay_msg)
+
+    def _image_timed_out(self):
+        return self._last_image_s is None or time.monotonic() - self._last_image_s > self._image_timeout_s
+
     def _timer_callback(self):
         self._frame_counter = (self._frame_counter + 1) & 0xFFFFFFFF
-        target_valid = target_valid_for_state(self._tracking_state)
+        image_timed_out = self._image_timed_out()
+        tracking_state = TRACKING_STATE_SEARCH if image_timed_out else self._tracking_state
+        los_x_rad = 0.0 if image_timed_out else self._los_x_rad
+        los_y_rad = 0.0 if image_timed_out else self._los_y_rad
+        bbox_width_px = 0.0 if image_timed_out else self._bbox_width_px
+        bbox_height_px = 0.0 if image_timed_out else self._bbox_height_px
+        target_valid = target_valid_for_state(tracking_state)
         frame = build_frame(
-            self._los_x_rad,
-            self._los_y_rad,
-            self._bbox_width_px,
-            self._bbox_height_px,
-            self._tracking_state,
+            los_x_rad,
+            los_y_rad,
+            bbox_width_px,
+            bbox_height_px,
+            tracking_state,
             self._frame_counter,
         )
 
@@ -222,11 +309,12 @@ class RosImageToDytSender(Node):
         self._last_send_s = send_time_s
 
         print(
-            f"target_valid={target_valid} tracking_state={self._tracking_state} "
-            f"los_x_deg={math.degrees(self._los_x_rad):+.2f} "
-            f"los_y_deg={math.degrees(self._los_y_rad):+.2f} "
-            f"bbox_area={self._bbox_area:.1f} frame_counter={self._frame_counter} "
-            f"send_dt_s={send_dt_s:.4f}",
+            f"target_valid={target_valid} tracking_state={tracking_state} "
+            f"contour_count={self._contour_count} max_area={self._max_area:.1f} "
+            f"bbox_width={bbox_width_px:.1f} bbox_height={bbox_height_px:.1f} "
+            f"los_x_deg={math.degrees(los_x_rad):+.2f} "
+            f"los_y_deg={math.degrees(los_y_rad):+.2f} "
+            f"frame_counter={self._frame_counter} send_dt_s={send_dt_s:.4f}",
             flush=True,
         )
 
