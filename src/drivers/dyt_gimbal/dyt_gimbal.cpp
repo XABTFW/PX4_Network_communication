@@ -133,7 +133,6 @@ private:
 	uint8_t _alt_last_sync2_byte{0};
 	uint32_t _command_tx_count{0};
 	uint8_t _last_command_control{0};
-	uint8_t _last_failed_command_control{0};
 	int _last_write_errno{0};
 	int _last_write_result{0};
 
@@ -206,7 +205,6 @@ void DytGimbal::show_status()
 	PX4_INFO("last write result: %d errno: %d", _last_write_result, _last_write_errno);
 	PX4_INFO("tx commands: %lu", static_cast<unsigned long>(_command_tx_count));
 	PX4_INFO("last command control: 0x%02x", _last_command_control);
-	PX4_INFO("last failed command control: 0x%02x", _last_failed_command_control);
 	PX4_INFO("last command tx: %.3f s", static_cast<double>(_last_command_time > 0 ?
 			(hrt_absolute_time() - _last_command_time) * 1e-6 : -1.0));
 	PX4_INFO("last target: state=%u valid=%u follow=%u motor=%u elect_lock=%u yaw=%.2f deg",
@@ -1072,7 +1070,8 @@ void DytGimbal::send_command_frame(uint8_t control, int16_t param_x, int16_t par
 
 	if (!write_command_buffer(buffer, sizeof(buffer))) {
 		++_write_error_count;
-		_last_failed_command_control = control;
+		PX4_WARN("DYT tx 0x%02x failed result=%d errno=%d",
+			 static_cast<unsigned>(control), _last_write_result, _last_write_errno);
 
 	} else {
 		++_command_tx_count;

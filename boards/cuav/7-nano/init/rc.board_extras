@@ -1,0 +1,8 @@
+#!/bin/sh
+#
+# DYT serial camera integration for CUAV 7-Nano.
+# Assumes the camera is connected to TEL2, which maps to /dev/ttyS3.
+#
+
+dyt_gimbal start -d /dev/ttyS3
+dyt_guidance start

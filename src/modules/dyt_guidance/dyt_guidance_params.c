@@ -43,7 +43,7 @@ PARAM_DEFINE_FLOAT(DYTG_STK_TK, 0.30f);
  * @max 20
  * @group DYT Guidance
  */
-PARAM_DEFINE_INT32(DYTG_LOCK_N, 1);
+PARAM_DEFINE_INT32(DYTG_LOCK_N, 3);
 
 /**
  * Consecutive lock frames to recover from lost hold
@@ -52,7 +52,7 @@ PARAM_DEFINE_INT32(DYTG_LOCK_N, 1);
  * @max 20
  * @group DYT Guidance
  */
-PARAM_DEFINE_INT32(DYTG_RELOCKN, 1);
+PARAM_DEFINE_INT32(DYTG_RELOCKN, 3);
 
 /**
  * Search wait timeout
@@ -96,7 +96,7 @@ PARAM_DEFINE_FLOAT(DYTG_SC_YSPD, 3.f);
  * @max 90
  * @group DYT Guidance
  */
-PARAM_DEFINE_FLOAT(DYTG_SC_PSPD, 8.f);
+PARAM_DEFINE_FLOAT(DYTG_SC_PSPD, 3.f);
 
 /**
  * Search pitch step
@@ -106,7 +106,7 @@ PARAM_DEFINE_FLOAT(DYTG_SC_PSPD, 8.f);
  * @max 30
  * @group DYT Guidance
  */
-PARAM_DEFINE_FLOAT(DYTG_SC_STEP, 15.f);
+PARAM_DEFINE_FLOAT(DYTG_SC_STEP, 20.f);
 
 /**
  * Search edge pause
