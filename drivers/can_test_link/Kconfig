@@ -1,0 +1,5 @@
+menuconfig DRIVERS_CAN_TEST_LINK
+	bool "can_test_link"
+	default n
+	---help---
+		Enable support for CAN test link module

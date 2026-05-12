@@ -1,0 +1,101 @@
+给用户展示的验证效果
+1️⃣ 启动成功提示（MAVLink 控制台）
+
+
+nsh> dm_imu_l1 start
+
+INFO  [dm_imu_l1] DM-IMU initialized on /dev/can0, CAN ID: 0x10, MST ID: 0x00
+INFO  [dm_imu_l1] Switching to active mode
+INFO  [dm_imu_l1] DM-IMU started in active mode
+✅ 看到这三行，说明驱动启动成功
+
+2️⃣ 状态正常显示
+nsh> dm_imu_l1 status
+
+INFO  [dm_imu_l1] State: 2
+INFO  [dm_imu_l1] Error count: 0
+INFO  [dm_imu_l1] Active: yes
+✅ State: 2（主动模式）、Error count: 0、Active: yes
+
+3️⃣ 实时数据流（最重要！）
+nsh> listener sensor_accel
+
+TOPIC: sensor_accel
+	timestamp: 1234567890 (0.123 seconds ago)
+	device_id: 16777232
+	x: 0.123 m/s^2
+	y: -0.456 m/s^2
+	z: 9.81 m/s^2          ← 静止时约 9.8
+	error_count: 0
+
+TOPIC: sensor_accel
+	timestamp: 1234567900 (0.010 seconds ago)  ← 持续更新
+	device_id: 16777232
+	x: 0.125 m/s^2
+	y: -0.454 m/s^2
+	z: 9.82 m/s^2
+	error_count: 0
+✅ 数据每 10ms 更新一次，z 轴约 9.8 m/s²
+
+4️⃣ 陀螺仪数据
+nsh> listener sensor_gyro
+
+TOPIC: sensor_gyro
+	timestamp: 1234567890
+	device_id: 33554448
+	x: 0.001 rad/s         ← 静止时接近 0
+	y: -0.002 rad/s
+	z: 0.000 rad/s
+	error_count: 0
+✅ 静止时接近 0，转动时数值变化
+
+5️⃣ 姿态数据
+nsh> listener vehicle_attitude
+
+TOPIC: vehicle_attitude
+	timestamp: 1234567890
+	q[0]: 1.000            ← 四元数 w
+	q[1]: 0.000            ← 四元数 x
+	q[2]: 0.000            ← 四元数 y
+	q[3]: 0.000            ← 四元数 z
+✅ 水平静止时 q[0] 接近 1.0
+
+6️⃣ QGroundControl 显示
+在 QGroundControl 主界面：
+
+人工地平仪：实时显示飞机姿态，倾斜 IMU 时地平仪跟随变化
+HUD 数据：显示加速度、角速度数值
+传感器状态：Vehicle Setup → Sensors → IMU 显示绿色 ✅
+7️⃣ 校准演示
+nsh> dm_imu_l1 accel_cal
+INFO  [dm_imu_l1] Starting accelerometer calibration...
+
+# IMU 指示灯变黄色闪烁 3-5 秒
+# 然后恢复绿色呼吸
+
+nsh> dm_imu_l1 save
+INFO  [dm_imu_l1] Saving parameters to flash...
+✅ 校准后数据更稳定，z 轴更接近 9.8
+
+8️⃣ 硬件指示灯
+绿灯呼吸：正常工作 ✅
+黄灯闪烁：校准中
+红灯常亮：错误 ❌
+🎬 完整演示流程（30秒验证）
+# 1. 启动驱动
+dm_imu_l1 start
+# 看到：DM-IMU started in active mode ✅
+
+# 2. 查看状态
+dm_imu_l1 status
+# 看到：State: 2, Error count: 0, Active: yes ✅
+
+# 3. 查看数据（最关键！）
+listener sensor_accel
+# 看到：数据持续更新，z 约 9.8 ✅
+
+# 4. 倾斜 IMU
+# 看到：x, y, z 数值变化 ✅
+
+# 5. 在 QGC 中
+# 看到：人工地平仪跟随 IMU 倾斜 ✅

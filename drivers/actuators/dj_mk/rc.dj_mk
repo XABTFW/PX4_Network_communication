@@ -1,0 +1,25 @@
+#!/bin/sh
+#
+# DJ_MK ASMG-MD Servo Driver startup script
+#
+# This script can be added to your PX4 startup configuration
+# to automatically start the DJ_MK driver on boot
+#
+
+# Check if DJ_MK is enabled
+if param compare DJ_MK_ENABLE 1
+then
+    echo "Starting DJ_MK servo driver"
+
+    # Start the driver
+    dj_mk start
+
+    if [ $? -eq 0 ]
+    then
+        echo "DJ_MK driver started successfully"
+    else
+        echo "Failed to start DJ_MK driver"
+    fi
+else
+    echo "DJ_MK driver is disabled (DJ_MK_ENABLE=0)"
+fi

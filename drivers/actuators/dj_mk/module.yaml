@@ -1,0 +1,16 @@
+module_name: DJ_MK Servo Driver
+
+actuator_output:
+    output_groups:
+        - param_prefix: 'DJ_MK'
+          channel_label: 'Servo'
+          standard_params:
+              disarmed: { min: 1000, max: 2000, default: 1500 }
+              min: { min: 1000, max: 2000, default: 1000 }
+              max: { min: 1000, max: 2000, default: 2000 }
+          num_channels: 1
+          per_channel_extra_params:
+              - name: 'FUNC'
+                label: 'Function'
+                function: 'true'
+                default: 0

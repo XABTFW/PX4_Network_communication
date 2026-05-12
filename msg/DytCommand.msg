@@ -1,5 +1,7 @@
 uint64 timestamp  # time since system start (microseconds)
 
+uint8 ORB_QUEUE_LENGTH = 8
+
 uint8 CMD_NONE = 0
 uint8 CMD_AUTO_LOCK = 1
 uint8 CMD_STOP_TRACK = 2

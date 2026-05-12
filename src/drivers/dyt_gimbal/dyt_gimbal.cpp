@@ -985,7 +985,7 @@ void DytGimbal::publish_shell_command(uint8_t command)
 		cmd.param_x = -100;
 	}
 
-	send_protocol_command(cmd);
+	_dyt_command_pub.publish(cmd);
 }
 
 void DytGimbal::send_center_sequence()

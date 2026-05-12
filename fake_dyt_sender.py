@@ -26,6 +26,19 @@ LOST_RELOCK_RELOCK_START_S = 30.0
 LOST_RELOCK_CYCLE_LOCKED_S = 5.0
 LOST_RELOCK_CYCLE_LOST_S = 10.0
 LOST_RELOCK_CYCLE_RELOCKED_S = 10.0
+TRACK_CENTER_S = 10.0
+TRACK_LEFT_S = 10.0
+TRACK_RIGHT_S = 10.0
+TRACK_UP_S = 5.0
+TRACK_DOWN_S = 5.0
+TRACK_CIRCLE_S = 20.0
+TRACK_RADIUS_DEG = 5.0
+TRACK_LEFT_START_S = TRACK_CENTER_S
+TRACK_RIGHT_START_S = TRACK_LEFT_START_S + TRACK_LEFT_S
+TRACK_UP_START_S = TRACK_RIGHT_START_S + TRACK_RIGHT_S
+TRACK_DOWN_START_S = TRACK_UP_START_S + TRACK_UP_S
+TRACK_CIRCLE_START_S = TRACK_DOWN_START_S + TRACK_DOWN_S
+TRACK_HOLD_START_S = TRACK_CIRCLE_START_S + TRACK_CIRCLE_S
 
 
 def parse_args():
@@ -53,7 +66,7 @@ def parse_args():
     )
     parser.add_argument(
         "--mode",
-        choices=("center", "right", "left", "up", "down", "lost", "sweep", "lost_relock"),
+        choices=("center", "right", "left", "up", "down", "lost", "sweep", "lost_relock", "track"),
         default="center",
         help="fake target mode",
     )
@@ -99,9 +112,61 @@ def lost_relock_phase(elapsed_s, lost_start_s, relock_start_s, cycle):
     return "relocked"
 
 
+def track_phase(elapsed_s):
+    if elapsed_s < TRACK_LEFT_START_S:
+        return "center"
+
+    if elapsed_s < TRACK_RIGHT_START_S:
+        return "left"
+
+    if elapsed_s < TRACK_UP_START_S:
+        return "right"
+
+    if elapsed_s < TRACK_DOWN_START_S:
+        return "up"
+
+    if elapsed_s < TRACK_CIRCLE_START_S:
+        return "down"
+
+    if elapsed_s < TRACK_HOLD_START_S:
+        return "circle"
+
+    return "center"
+
+
+def track_sample(elapsed_s):
+    phase = track_phase(elapsed_s)
+
+    if phase == "left":
+        return -TRACK_RADIUS_DEG, 0.0, TRACKING_STATE_LOCKED
+
+    if phase == "right":
+        return TRACK_RADIUS_DEG, 0.0, TRACKING_STATE_LOCKED
+
+    if phase == "up":
+        return 0.0, TRACK_RADIUS_DEG, TRACKING_STATE_LOCKED
+
+    if phase == "down":
+        return 0.0, -TRACK_RADIUS_DEG, TRACKING_STATE_LOCKED
+
+    if phase == "circle":
+        circle_elapsed_s = elapsed_s - TRACK_CIRCLE_START_S
+        theta_rad = 2.0 * math.pi * circle_elapsed_s / TRACK_CIRCLE_S
+        return (
+            TRACK_RADIUS_DEG * math.cos(theta_rad),
+            TRACK_RADIUS_DEG * math.sin(theta_rad),
+            TRACKING_STATE_LOCKED,
+        )
+
+    return 0.0, 0.0, TRACKING_STATE_LOCKED
+
+
 def mode_phase(mode, elapsed_s, lost_start_s, relock_start_s, cycle):
     if mode == "lost_relock":
         return lost_relock_phase(elapsed_s, lost_start_s, relock_start_s, cycle)
+
+    if mode == "track":
+        return track_phase(elapsed_s)
 
     return mode
 
@@ -130,6 +195,9 @@ def mode_sample(mode, elapsed_s, lost_start_s, relock_start_s, cycle):
             return 0.0, 0.0, TRACKING_STATE_SEARCH
 
         return 0.0, 0.0, TRACKING_STATE_LOCKED
+
+    if mode == "track":
+        return track_sample(elapsed_s)
 
     phase = (elapsed_s % SWEEP_PERIOD_S) / SWEEP_PERIOD_S
     triangle = 4.0 * abs(phase - 0.5) - 1.0

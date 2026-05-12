@@ -56,6 +56,7 @@ private:
 	static constexpr int OBS_BUFFER_LEN{6};
 	static constexpr float TARGET_MIN_BBOX_PX{4.f};
 	static constexpr float TARGET_MAX_LOS_RAD{0.45f};
+	static constexpr float TARGET_MAX_HINT_LOS_RAD{0.35f};
 	static constexpr float TARGET_MAX_GIMBAL_YAW_RAD{1.92f};
 	static constexpr int SEARCH_CENTER_PASSES{2};
 	static constexpr hrt_abstime MANUAL_TAKEOVER_GRACE{500_ms};
@@ -116,7 +117,7 @@ private:
 	void capture_hold_setpoint();
 	void publish_hold_setpoint();
 	void publish_track_setpoint(const TrackProfile &profile);
-	void publish_offboard_mode(bool hold_mode);
+	void publish_offboard_mode(bool position_mode);
 	void request_offboard_mode();
 	void publish_status();
 
@@ -587,7 +588,7 @@ bool DytGuidance::target_fresh() const
 
 bool DytGuidance::target_lock_candidate() const
 {
-	if (!_have_target || _last_target.timestamp_sample == 0) {
+	if (!_have_target || _last_target.timestamp_sample == 0 || !target_fresh()) {
 		return false;
 	}
 
@@ -602,20 +603,20 @@ bool DytGuidance::target_lock_candidate() const
 		return false;
 	}
 
-	const bool bbox_valid = PX4_ISFINITE(_last_target.bbox_width_px)
-				&& PX4_ISFINITE(_last_target.bbox_height_px)
-				&& _last_target.bbox_width_px >= TARGET_MIN_BBOX_PX
-				&& _last_target.bbox_height_px >= TARGET_MIN_BBOX_PX;
+	if (!target_geometry_valid(_last_target)) {
+		return false;
+	}
 
 	if (target_locked()) {
 		return true;
 	}
 
-	if (_last_target.auto_hint && bbox_valid) {
-		return true;
+	if (!_last_target.auto_hint) {
+		return false;
 	}
 
-	return false;
+	return fabsf(_last_target.los_x_rad) <= TARGET_MAX_HINT_LOS_RAD
+	       && fabsf(_last_target.los_y_rad) <= TARGET_MAX_HINT_LOS_RAD;
 }
 
 bool DytGuidance::target_usable() const
@@ -697,8 +698,7 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 
 	_velocity_sp(0) = horizontal_dir(0) * profile.v_cmd;
 	_velocity_sp(1) = horizontal_dir(1) * profile.v_cmd;
-	_velocity_sp(2) = math::constrain(_los_ned(2) * profile.v_cmd * _param_z_scale.get(),
-					  -_param_max_dz.get(), _param_max_dz.get());
+	_velocity_sp(2) = NAN;
 
 	Vector2f vel_xy(_velocity_sp(0), _velocity_sp(1));
 
@@ -708,8 +708,11 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 		_velocity_sp(1) = vel_xy(1);
 	}
 
-	const float closing_proxy = math::max(_param_vmin.get(), vehicle_velocity.dot(_los_ned));
-	const Vector3f velocity_error = _velocity_sp - vehicle_velocity;
+	Vector3f horizontal_vehicle_velocity(vehicle_velocity(0), vehicle_velocity(1), 0.f);
+	Vector3f horizontal_velocity_sp(_velocity_sp(0), _velocity_sp(1), 0.f);
+
+	const float closing_proxy = math::max(_param_vmin.get(), horizontal_vehicle_velocity.dot(_los_ned));
+	const Vector3f velocity_error = horizontal_velocity_sp - horizontal_vehicle_velocity;
 
 	_acceleration_sp = profile.nav_gain * closing_proxy * (_omega_los.cross(_los_ned))
 			   + profile.k_a * _los_ned
@@ -723,7 +726,7 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 		_acceleration_sp(1) = acc_xy(1);
 	}
 
-	_acceleration_sp(2) = math::constrain(_acceleration_sp(2), -_param_max_acc.get(), _param_max_acc.get());
+	_acceleration_sp(2) = NAN;
 
 	const float current_yaw = Eulerf(Quatf(_vehicle_attitude.q)).psi();
 	float desired_yaw = _hold_yaw;
@@ -743,7 +746,7 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	setpoint.timestamp = hrt_absolute_time();
 	setpoint.position[0] = NAN;
 	setpoint.position[1] = NAN;
-	setpoint.position[2] = NAN;
+	setpoint.position[2] = _hold_position(2);
 	_velocity_sp.copyTo(setpoint.velocity);
 	_acceleration_sp.copyTo(setpoint.acceleration);
 	setpoint.yaw = _yaw_sp;
@@ -752,12 +755,12 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	_trajectory_setpoint_pub.publish(setpoint);
 }
 
-void DytGuidance::publish_offboard_mode(bool hold_mode)
+void DytGuidance::publish_offboard_mode(bool position_mode)
 {
 	offboard_control_mode_s mode{};
 	mode.timestamp = hrt_absolute_time();
-	mode.position = hold_mode;
-	mode.velocity = !hold_mode;
+	mode.position = position_mode;
+	mode.velocity = !position_mode;
 	mode.acceleration = false;
 	mode.attitude = false;
 	mode.body_rate = false;
@@ -1372,13 +1375,13 @@ void DytGuidance::Run()
 
 	if (_state == TaskState::TrackFollow) {
 		request_offboard_mode();
-		publish_offboard_mode(false);
+		publish_offboard_mode(true);
 		publish_track_setpoint(follow_profile());
 	}
 
 	if (_state == TaskState::TrackIntercept) {
 		request_offboard_mode();
-		publish_offboard_mode(false);
+		publish_offboard_mode(true);
 		publish_track_setpoint(intercept_profile());
 	}
 
