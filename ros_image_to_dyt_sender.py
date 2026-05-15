@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Detect a red target in ROS2 images and send DYT telemetry frames to PX4."""
 
+import json
 import math
 import os
+import socket
 import struct
 import sys
 import time
@@ -122,6 +124,9 @@ class RosImageToDytSender(Node):
         self.declare_parameter("s_min", 70)
         self.declare_parameter("v_min", 50)
         self.declare_parameter("image_timeout_s", 0.3)
+        self.declare_parameter("enable_gz_gimbal_udp", False)
+        self.declare_parameter("udp_target_host", "127.0.0.1")
+        self.declare_parameter("udp_target_port", 15200)
 
         self._image_topic = self.get_parameter("image_topic").value
         self._port = self.get_parameter("port").value
@@ -138,6 +143,9 @@ class RosImageToDytSender(Node):
         self._s_min = int(self.get_parameter("s_min").value)
         self._v_min = int(self.get_parameter("v_min").value)
         self._image_timeout_s = float(self.get_parameter("image_timeout_s").value)
+        self._enable_gz_gimbal_udp = bool(self.get_parameter("enable_gz_gimbal_udp").value)
+        self._udp_target_host = self.get_parameter("udp_target_host").value
+        self._udp_target_port = int(self.get_parameter("udp_target_port").value)
 
         if self._rate <= 0.0:
             raise ValueError("rate must be greater than 0")
@@ -155,6 +163,9 @@ class RosImageToDytSender(Node):
         self._bbox_area = 0.0
         self._contour_count = 0
         self._max_area = 0.0
+        self._gz_gimbal_udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM) if self._enable_gz_gimbal_udp else None
+        self._gz_gimbal_udp_addr = (self._udp_target_host, self._udp_target_port)
+        self._gz_gimbal_udp_warned = False
 
         self.create_subscription(Image, self._image_topic, self._image_callback, 10)
         self._mask_pub = self.create_publisher(Image, "/dyt_debug/mask", 10)
@@ -164,11 +175,19 @@ class RosImageToDytSender(Node):
         self.get_logger().info(
             f"sending DYT frames to {self._port} at {self._rate:.1f}Hz, image_topic={self._image_topic}"
         )
+        if self._enable_gz_gimbal_udp:
+            self.get_logger().info(
+                f"sending Gazebo gimbal target UDP to udp://{self._udp_target_host}:{self._udp_target_port}"
+            )
 
     def destroy_node(self):
         if getattr(self, "_fd", None) is not None:
             os.close(self._fd)
             self._fd = None
+
+        if getattr(self, "_gz_gimbal_udp_sock", None) is not None:
+            self._gz_gimbal_udp_sock.close()
+            self._gz_gimbal_udp_sock = None
 
         super().destroy_node()
 
@@ -285,6 +304,26 @@ class RosImageToDytSender(Node):
     def _image_timed_out(self):
         return self._last_image_s is None or time.monotonic() - self._last_image_s > self._image_timeout_s
 
+    def _send_gz_gimbal_udp(self, target_valid, los_x_rad, los_y_rad):
+        if self._gz_gimbal_udp_sock is None:
+            return
+
+        msg = {
+            "valid": bool(target_valid),
+            "los_x_rad": float(los_x_rad),
+            "los_y_rad": float(los_y_rad),
+        }
+
+        try:
+            self._gz_gimbal_udp_sock.sendto(
+                json.dumps(msg, separators=(",", ":")).encode("utf-8"),
+                self._gz_gimbal_udp_addr,
+            )
+        except OSError as exc:
+            if not self._gz_gimbal_udp_warned:
+                self.get_logger().warn(f"Gazebo gimbal UDP send failed: {exc}")
+                self._gz_gimbal_udp_warned = True
+
     def _timer_callback(self):
         self._frame_counter = (self._frame_counter + 1) & 0xFFFFFFFF
         image_timed_out = self._image_timed_out()
@@ -307,6 +346,7 @@ class RosImageToDytSender(Node):
         write_frame_once(self._fd, frame)
         send_dt_s = send_time_s - self._last_send_s if self._last_send_s is not None else float("nan")
         self._last_send_s = send_time_s
+        self._send_gz_gimbal_udp(target_valid, los_x_rad, los_y_rad)
 
         print(
             f"target_valid={target_valid} tracking_state={tracking_state} "

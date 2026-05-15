@@ -6,3 +6,13 @@
 
 dyt_gimbal start -d /dev/ttyS3
 dyt_guidance start
+
+if param compare MAV_SYS_ID 1
+then
+	cooperative_rendezvous start -r broadcast
+fi
+
+if param compare MAV_SYS_ID 2
+then
+	cooperative_rendezvous start -r rendezvous -t 1 -d 5
+fi

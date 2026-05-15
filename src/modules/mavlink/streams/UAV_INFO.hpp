@@ -38,6 +38,7 @@
 #include <uORB/topics/vehicle_status.h>
 #include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/home_position.h>
+#include <uORB/topics/cooperative_position.h>
 #include <lib/geo/geo.h>
 #include <drivers/drv_hrt.h>
 
@@ -54,7 +55,8 @@ public:
 
 	unsigned get_size() override
 	{
-		return _lpos_sub.advertised() ? MAVLINK_MSG_ID_UAV_INFO_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES : 0;
+		return (_lpos_sub.advertised() || _cooperative_position_sub.advertised()) ?
+		       MAVLINK_MSG_ID_UAV_INFO_LEN + MAVLINK_NUM_NON_PAYLOAD_BYTES : 0;
 	}
 
 private:
@@ -70,6 +72,7 @@ private:
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _gps_sub{ORB_ID(sensor_gps)};
 	uORB::Subscription _home_position_sub{ORB_ID(home_position)};
+	uORB::Subscription _cooperative_position_sub{ORB_ID(cooperative_position)};
 
 	MapProjection _global_local_proj_ref{};
 	double _ref_lat{0.0};
@@ -84,6 +87,30 @@ private:
 
 	bool send() override
 	{
+		cooperative_position_s cooperative_position{};
+
+		if (_cooperative_position_sub.copy(&cooperative_position) &&
+		    cooperative_position.timestamp != 0 &&
+		    (hrt_absolute_time() - cooperative_position.timestamp) < 300000 &&
+		    cooperative_position.mavid == static_cast<uint32_t>(_mavlink->get_system_id())) {
+			mavlink_uav_info_t msg{};
+			msg.mavid = cooperative_position.mavid;
+			msg.group_id = 0;
+			msg.is_leader = 0;
+			msg.lat = cooperative_position.lat;
+			msg.lon = cooperative_position.lon;
+			msg.rel_alt = cooperative_position.alt;
+			msg.vx = cooperative_position.vx;
+			msg.vy = cooperative_position.vy;
+			msg.vz = cooperative_position.vz;
+			msg.yaw = cooperative_position.yaw;
+			msg.yaw_speed = cooperative_position.yawspeed;
+			msg.land = 0;
+
+			mavlink_msg_uav_info_send_struct(_mavlink->get_channel(), &msg);
+			return true;
+		}
+
 		// 每次都检查是否为主机，支持 QGC 动态切换主机
 		int32_t swarm_set_leader = 0;
 		if (_param_leader != PARAM_INVALID) {

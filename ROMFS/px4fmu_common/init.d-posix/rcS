@@ -374,5 +374,19 @@ fi
 mavlink boot_complete
 replay trystart
 
-swarm_node start 
+# swarm_node is disabled by default. Start it manually if needed.
+# swarm_node start
+
+# Cooperative rendezvous autostart for two-aircraft SITL.
+# Aircraft 1 broadcasts its own position, aircraft 2 flies near aircraft 1.
+if param compare MAV_SYS_ID 1
+then
+	cooperative_rendezvous start -r broadcast -F
+fi
+
+if param compare MAV_SYS_ID 2
+then
+	cooperative_rendezvous start -r rendezvous -t 1 -d 5 -F
+fi
+
 test_mavlink start

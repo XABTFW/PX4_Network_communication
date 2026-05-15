@@ -275,6 +275,7 @@ set(msg_files
 	versioned/VehicleRatesSetpoint.msg
 	versioned/VehicleStatus.msg
 	versioned/VtolVehicleStatus.msg
+	CooperativePosition.msg
 	UavInfo.msg
 	FollowerInfo.msg
 	SwarmStartFlag.msg

@@ -1,0 +1,112 @@
+#pragma once
+
+#include <lib/geo/geo.h>
+#include <matrix/matrix/math.hpp>
+#include <px4_platform_common/module.h>
+#include <px4_platform_common/module_params.h>
+#include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
+#include <uORB/Publication.hpp>
+#include <uORB/Subscription.hpp>
+#include <uORB/SubscriptionInterval.hpp>
+#include <uORB/topics/cooperative_position.h>
+#include <uORB/topics/dyt_guidance_status.h>
+#include <uORB/topics/follower_info.h>
+#include <uORB/topics/manual_control_setpoint.h>
+#include <uORB/topics/offboard_control_mode.h>
+#include <uORB/topics/parameter_update.h>
+#include <uORB/topics/trajectory_setpoint.h>
+#include <uORB/topics/vehicle_command.h>
+#include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_status.h>
+
+using namespace time_literals;
+
+class CooperativeRendezvous : public ModuleBase<CooperativeRendezvous>, public ModuleParams,
+	public px4::ScheduledWorkItem
+{
+public:
+	enum class Role {
+		Auto,
+		Broadcast,
+		Rendezvous
+	};
+
+	struct Options {
+		Role role{Role::Auto};
+		uint32_t target_id{1};
+		matrix::Vector3f target_offset{-5.f, 0.f, 0.f};
+		float max_speed{3.f};
+		float target_timeout_s{2.f};
+		bool auto_arm{false};
+		bool auto_offboard{true};
+		bool relax_failsafes{false};
+	};
+
+	CooperativeRendezvous(const Options &options);
+	~CooperativeRendezvous() override = default;
+
+	static int task_spawn(int argc, char *argv[]);
+	static int custom_command(int argc, char *argv[]);
+	static int print_usage(const char *reason = nullptr);
+
+	bool init();
+	int print_status() override;
+
+private:
+	void Run() override;
+
+	void update_params_if_needed();
+	void update_vehicle_id();
+	Role active_role() const;
+	float aux_value(int index) const;
+	bool aux_switch_active(int index) const;
+	bool button_active(int button) const;
+	bool rendezvous_switch_enabled() const;
+	bool dyt_guidance_active() const;
+	bool local_position_valid(const vehicle_local_position_s &local_pos) const;
+	bool update_map_projection(const vehicle_local_position_s &local_pos);
+	void publish_own_position(const vehicle_local_position_s &local_pos);
+	bool update_target_from_link();
+	bool target_position_local(const vehicle_local_position_s &local_pos, matrix::Vector3f &target_position) const;
+	void run_rendezvous(const vehicle_local_position_s &local_pos, const vehicle_status_s &status);
+	void keep_current_position_setpoint(const vehicle_local_position_s &local_pos);
+	void publish_offboard_heartbeat(bool position_control, bool velocity_control);
+	void publish_trajectory_setpoint(const matrix::Vector3f &position, float yaw);
+	void request_offboard(const vehicle_status_s &status);
+	void request_arm(const vehicle_status_s &status);
+	void hold_position(const vehicle_local_position_s &local_pos);
+	void configure_relaxed_failsafes();
+
+	Options _options{};
+	uint32_t _vehicle_id{0};
+	bool _vehicle_id_initialized{false};
+	bool _map_ref_initialized{false};
+	MapProjection _map_ref{};
+
+	follower_info_s _target_info{};
+	hrt_abstime _last_target_time{0};
+	hrt_abstime _last_mode_request{0};
+	hrt_abstime _last_arm_request{0};
+	hrt_abstime _last_status_log{0};
+	bool _failsafes_configured{false};
+
+	manual_control_setpoint_s _manual_control{};
+	dyt_guidance_status_s _dyt_guidance_status{};
+
+	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
+	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Subscription _follower_info_sub{ORB_ID(follower_info)};
+	uORB::Subscription _manual_control_sub{ORB_ID(manual_control_setpoint)};
+	uORB::Subscription _dyt_guidance_status_sub{ORB_ID(dyt_guidance_status)};
+	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
+
+	uORB::Publication<cooperative_position_s> _cooperative_position_pub{ORB_ID(cooperative_position)};
+	uORB::Publication<offboard_control_mode_s> _offboard_control_mode_pub{ORB_ID(offboard_control_mode)};
+	uORB::Publication<trajectory_setpoint_s> _trajectory_setpoint_pub{ORB_ID(trajectory_setpoint)};
+	uORB::Publication<vehicle_command_s> _vehicle_command_pub{ORB_ID(vehicle_command)};
+
+	DEFINE_PARAMETERS(
+		(ParamInt<px4::params::CRDZ_ACT_AUX>) _param_act_aux,
+		(ParamInt<px4::params::CRDZ_ACT_BTN>) _param_act_btn
+	)
+};
