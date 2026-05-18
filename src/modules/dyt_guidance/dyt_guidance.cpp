@@ -103,6 +103,7 @@ private:
 
 	float aux_value(int index) const;
 	bool aux_switch_active(int index) const;
+	bool button_active(int button) const;
 	bool payload_switch_active() const;
 	bool activation_requested() const;
 	bool preconditions_ok() const;
@@ -229,6 +230,7 @@ private:
 
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::DYTG_ACT_AUX>) _param_act_aux,
+		(ParamInt<px4::params::DYTG_ACT_BTN>) _param_act_btn,
 		(ParamInt<px4::params::DYTG_INT_AUX>) _param_int_aux,
 		(ParamFloat<px4::params::DYTG_STK_TK>) _param_stick_takeover,
 		(ParamInt<px4::params::DYTG_LOCK_N>) _param_lock_frames,
@@ -301,6 +303,8 @@ void DytGuidance::show_status()
 	PX4_INFO("preconditions ok: %d", preconditions_ok());
 	PX4_INFO("activation request: %d", activation_requested());
 	PX4_INFO("activation aux value: %.2f", static_cast<double>(aux_value(_param_act_aux.get())));
+	PX4_INFO("activation button: %ld buttons=0x%04x",
+		 static_cast<long>(_param_act_btn.get()), static_cast<unsigned>(_manual_control.buttons));
 	PX4_INFO("payload switch: %u", static_cast<unsigned>(_manual_switches.payload_power_switch));
 	PX4_INFO("manual valid: %u roll=%.2f pitch=%.2f yaw=%.2f sticks=%u",
 		 static_cast<unsigned>(_manual_control.valid),
@@ -362,6 +366,15 @@ bool DytGuidance::aux_switch_active(int index) const
 	return PX4_ISFINITE(value) && value > 0.5f;
 }
 
+bool DytGuidance::button_active(int button) const
+{
+	if (button < 0 || button > 15) {
+		return false;
+	}
+
+	return (_manual_control.buttons & (1u << button)) != 0;
+}
+
 bool DytGuidance::payload_switch_active() const
 {
 	return _manual_switches.payload_power_switch == manual_control_switches_s::SWITCH_POS_ON;
@@ -369,7 +382,7 @@ bool DytGuidance::payload_switch_active() const
 
 bool DytGuidance::activation_requested() const
 {
-	return aux_switch_active(_param_act_aux.get()) || payload_switch_active();
+	return aux_switch_active(_param_act_aux.get()) || button_active(_param_act_btn.get()) || payload_switch_active();
 }
 
 bool DytGuidance::preconditions_ok() const
@@ -698,7 +711,9 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 
 	_velocity_sp(0) = horizontal_dir(0) * profile.v_cmd;
 	_velocity_sp(1) = horizontal_dir(1) * profile.v_cmd;
-	_velocity_sp(2) = NAN;
+	const float z_scale = math::constrain(_param_z_scale.get(), 0.f, 1.f);
+	const float max_dz = math::max(_param_max_dz.get(), 0.1f);
+	_velocity_sp(2) = math::constrain(_los_ned(2) * profile.v_cmd * z_scale, -max_dz, max_dz);
 
 	Vector2f vel_xy(_velocity_sp(0), _velocity_sp(1));
 
@@ -726,7 +741,7 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 		_acceleration_sp(1) = acc_xy(1);
 	}
 
-	_acceleration_sp(2) = NAN;
+	_acceleration_sp(2) = 0.f;
 
 	const float current_yaw = Eulerf(Quatf(_vehicle_attitude.q)).psi();
 	float desired_yaw = _hold_yaw;
@@ -746,7 +761,7 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	setpoint.timestamp = hrt_absolute_time();
 	setpoint.position[0] = NAN;
 	setpoint.position[1] = NAN;
-	setpoint.position[2] = _hold_position(2);
+	setpoint.position[2] = NAN;
 	_velocity_sp.copyTo(setpoint.velocity);
 	_acceleration_sp.copyTo(setpoint.acceleration);
 	setpoint.yaw = _yaw_sp;
@@ -1375,13 +1390,13 @@ void DytGuidance::Run()
 
 	if (_state == TaskState::TrackFollow) {
 		request_offboard_mode();
-		publish_offboard_mode(true);
+		publish_offboard_mode(false);
 		publish_track_setpoint(follow_profile());
 	}
 
 	if (_state == TaskState::TrackIntercept) {
 		request_offboard_mode();
-		publish_offboard_mode(true);
+		publish_offboard_mode(false);
 		publish_track_setpoint(intercept_profile());
 	}
 

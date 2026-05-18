@@ -30,7 +30,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", default="x500_gimbal", help="Gazebo model name, or 'auto'")
     parser.add_argument("--gz-bin", default="gz", help="Gazebo CLI executable")
-    parser.add_argument("--rate", type=float, default=10.0, help="command publish rate in Hz")
+    parser.add_argument("--rate", type=float, default=20.0, help="command publish rate in Hz")
     parser.add_argument("--yaw-min", type=float, default=-70.0, help="search yaw min in deg")
     parser.add_argument("--yaw-max", type=float, default=70.0, help="search yaw max in deg")
     parser.add_argument("--pitch-top", type=float, default=20.0, help="search top pitch in deg")
@@ -40,9 +40,15 @@ def parse_args():
     parser.add_argument("--udp-bind", default="127.0.0.1", help="target packet bind address")
     parser.add_argument("--udp-port", type=int, default=15200, help="target packet UDP port")
     parser.add_argument("--no-target-udp", action="store_true", help="disable UDP target input and search forever")
-    parser.add_argument("--target-timeout", type=float, default=0.35, help="target freshness timeout in seconds")
-    parser.add_argument("--follow-gain", type=float, default=0.8, help="LOS-to-gimbal proportional gain")
-    parser.add_argument("--max-follow-step", type=float, default=4.0, help="max follow correction per tick in deg")
+    parser.add_argument("--target-timeout", type=float, default=0.5, help="target freshness timeout in seconds")
+    parser.add_argument("--follow-gain", type=float, default=1.2, help="LOS-to-gimbal proportional gain")
+    parser.add_argument("--max-follow-step", type=float, default=10.0, help="max follow correction per tick in deg")
+    parser.add_argument("--coast-time", type=float, default=0.4, help="keep moving from last target offset after target loss")
+    parser.add_argument("--coast-gain", type=float, default=0.8, help="coast correction scale after target loss")
+    parser.add_argument("--reacquire-timeout", type=float, default=3.0, help="local search time around last lock before global search")
+    parser.add_argument("--reacquire-yaw-range", type=float, default=18.0, help="local reacquire yaw range around last lock in deg")
+    parser.add_argument("--reacquire-pitch-range", type=float, default=10.0, help="local reacquire pitch range around last lock in deg")
+    parser.add_argument("--reacquire-speed", type=float, default=50.0, help="local reacquire scan speed in deg/s")
     parser.add_argument("--yaw-sign", type=float, default=1.0, help="set -1 if horizontal tracking moves the wrong way")
     parser.add_argument("--pitch-sign", type=float, default=-1.0, help="set 1 if vertical tracking moves the wrong way")
     parser.add_argument("--dry-run", action="store_true", help="print commands without publishing to Gazebo")
@@ -103,24 +109,40 @@ class GzPublisher:
             print(f"yaw={yaw_deg:+7.2f}deg pitch={pitch_deg:+7.2f}deg", flush=True)
             return
 
-        self._publish_one(self._yaw_topic, yaw_rad)
-        self._publish_one(self._pitch_topic, pitch_rad)
+        processes = (
+            (self._yaw_topic, self._start_publish(self._yaw_topic, yaw_rad)),
+            (self._pitch_topic, self._start_publish(self._pitch_topic, pitch_rad)),
+        )
 
-    def _publish_one(self, topic, value_rad):
+        for topic, process in processes:
+            self._finish_publish(topic, process)
+
+    def _start_publish(self, topic, value_rad):
         payload = f"data: {value_rad:.7f}"
 
         try:
-            subprocess.run(
+            return subprocess.Popen(
                 [self._gz_bin, "topic", "-t", topic, "-m", "gz.msgs.Double", "-p", payload],
-                check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
             )
-        except (OSError, subprocess.CalledProcessError) as exc:
+        except OSError as exc:
             if not self._warned:
                 print(f"Gazebo publish failed on {topic}: {exc}", file=sys.stderr)
                 self._warned = True
+            return None
+
+    def _finish_publish(self, topic, process):
+        if process is None:
+            return
+
+        _stdout, stderr = process.communicate()
+
+        if process.returncode != 0 and not self._warned:
+            message = stderr.strip() if stderr else f"exit code {process.returncode}"
+            print(f"Gazebo publish failed on {topic}: {message}", file=sys.stderr)
+            self._warned = True
 
 
 class TargetReceiver:
@@ -132,6 +154,7 @@ class TargetReceiver:
         self.los_x_rad = 0.0
         self.los_y_rad = 0.0
         self.last_update = 0.0
+        self.last_valid_update = 0.0
 
     def poll(self):
         while True:
@@ -144,6 +167,12 @@ class TargetReceiver:
 
     def fresh(self, now, timeout_s):
         return self.valid and (now - self.last_update) <= timeout_s
+
+    def valid_age(self, now):
+        if self.last_valid_update <= 0.0:
+            return float("inf")
+
+        return now - self.last_valid_update
 
     def _parse(self, text):
         try:
@@ -177,6 +206,9 @@ class TargetReceiver:
         self.los_x_rad = los_x
         self.los_y_rad = los_y
         self.last_update = time.monotonic()
+
+        if valid:
+            self.last_valid_update = self.last_update
 
 
 class SearchPattern:
@@ -216,6 +248,35 @@ class SearchPattern:
         self.pitch = clamp(pitch, self._pitch_bottom, self._pitch_top)
 
 
+class LocalReacquirePattern:
+    def __init__(self, args):
+        self._yaw_range = max(0.0, args.reacquire_yaw_range)
+        self._pitch_range = max(0.0, args.reacquire_pitch_range)
+        self._speed = max(1.0, args.reacquire_speed)
+        self._start_time = 0.0
+        self._anchor_yaw = 0.0
+        self._anchor_pitch = 0.0
+
+    def reset(self, yaw, pitch, now):
+        self._anchor_yaw = yaw
+        self._anchor_pitch = pitch
+        self._start_time = now
+
+    def clear(self):
+        self._start_time = 0.0
+
+    def active(self):
+        return self._start_time > 0.0
+
+    def update(self, now):
+        elapsed = max(0.0, now - self._start_time)
+        yaw_omega = self._speed / max(self._yaw_range, 1.0)
+        pitch_omega = self._speed / max(self._pitch_range * 2.0, 1.0)
+        yaw = self._anchor_yaw + self._yaw_range * math.sin(elapsed * yaw_omega)
+        pitch = self._anchor_pitch + self._pitch_range * math.sin(elapsed * pitch_omega)
+        return yaw, pitch
+
+
 def main():
     args = parse_args()
 
@@ -238,10 +299,15 @@ def main():
     publisher = GzPublisher(args.gz_bin, yaw_topic, pitch_topic, args.dry_run)
     target = None if args.no_target_udp else TargetReceiver(args.udp_bind, args.udp_port)
     search = SearchPattern(args)
+    reacquire = LocalReacquirePattern(args)
 
     period = 1.0 / args.rate
     last_time = time.monotonic()
     last_log = 0.0
+    last_yaw_correction = 0.0
+    last_pitch_correction = 0.0
+    last_lock_yaw = search.yaw
+    last_lock_pitch = search.pitch
 
     while True:
         now = time.monotonic()
@@ -258,9 +324,31 @@ def main():
             yaw = search.yaw + yaw_correction
             pitch = search.pitch + pitch_correction
             search.set_pose(yaw, pitch)
+            reacquire.clear()
+            last_yaw_correction = yaw_correction
+            last_pitch_correction = pitch_correction
+            last_lock_yaw = search.yaw
+            last_lock_pitch = search.pitch
             mode = "follow"
 
+        elif target is not None and target.valid_age(now) <= args.coast_time:
+            age_s = target.valid_age(now)
+            coast_scale = args.coast_gain * (1.0 - age_s / max(args.coast_time, 1e-3))
+            yaw = search.yaw + last_yaw_correction * coast_scale
+            pitch = search.pitch + last_pitch_correction * coast_scale
+            search.set_pose(yaw, pitch)
+            mode = "coast"
+
+        elif target is not None and target.valid_age(now) <= args.reacquire_timeout:
+            if not reacquire.active():
+                reacquire.reset(last_lock_yaw, last_lock_pitch, now)
+
+            yaw, pitch = reacquire.update(now)
+            search.set_pose(yaw, pitch)
+            mode = "reacq"
+
         else:
+            reacquire.clear()
             yaw, pitch = search.update(dt)
             mode = "search"
 

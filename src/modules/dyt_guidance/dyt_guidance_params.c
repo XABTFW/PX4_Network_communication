@@ -13,6 +13,19 @@
 PARAM_DEFINE_INT32(DYTG_ACT_AUX, 1);
 
 /**
+ * Activation joystick button
+ *
+ * Enables guidance using the MANUAL_CONTROL buttons bitmask. Button numbers
+ * match the zero-based numbering shown by QGroundControl.
+ *
+ * @value -1 Disabled
+ * @min -1
+ * @max 15
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_INT32(DYTG_ACT_BTN, -1);
+
+/**
  * Intercept AUX channel
  *
  * @value 0 Disabled
