@@ -85,9 +85,11 @@ private:
 	const char *lift_state_name(uint8_t state) const;
 
 	void handle_command_updates();
+	void send_startup_home_if_needed(hrt_abstime now);
 	void send_protocol_command(const dyt_command_s &cmd);
 	void publish_shell_command(uint8_t command);
 	void send_center_sequence();
+	int16_t angle_deg_to_cdeg(float angle_deg) const;
 	bool write_command_buffer(const uint8_t *buffer, size_t buffer_len);
 	void send_command_frame(uint8_t control, int16_t param_x, int16_t param_y, uint8_t param3, int8_t zoom_rate);
 
@@ -113,6 +115,9 @@ private:
 	hrt_abstime _last_state_publish{0};
 	hrt_abstime _last_command_time{0};
 	hrt_abstime _last_target_log_time{0};
+	hrt_abstime _startup_home_time{0};
+	hrt_abstime _startup_home_end_time{0};
+	hrt_abstime _startup_home_next_time{0};
 
 	uint32_t _frame_counter{0};
 	uint32_t _target_geo_frame_counter{0};
@@ -132,9 +137,12 @@ private:
 	uint32_t _alt_sync2_count{0};
 	uint8_t _alt_last_sync2_byte{0};
 	uint32_t _command_tx_count{0};
+	uint32_t _startup_home_count{0};
 	uint8_t _last_command_control{0};
 	int _last_write_errno{0};
 	int _last_write_result{0};
+	bool _startup_home_sent{false};
+	bool _startup_home_canceled{false};
 
 	dyt_target_s _last_target{};
 	dyt_status_reply_s _last_status_reply{};
@@ -150,7 +158,13 @@ private:
 		(ParamInt<px4::params::DYT_TO_MS>) _param_dyt_timeout_ms,
 		(ParamInt<px4::params::DYT_RTRY_MS>) _param_dyt_retry_ms,
 		(ParamInt<px4::params::DYT_LOG_MS>) _param_dyt_log_ms,
-		(ParamInt<px4::params::DYT_RAWLOG>) _param_dyt_rawlog
+		(ParamInt<px4::params::DYT_RAWLOG>) _param_dyt_rawlog,
+		(ParamInt<px4::params::DYT_HOME_EN>) _param_dyt_home_en,
+		(ParamInt<px4::params::DYT_HOME_DLY>) _param_dyt_home_delay_ms,
+		(ParamInt<px4::params::DYT_HOME_DUR>) _param_dyt_home_duration_ms,
+		(ParamInt<px4::params::DYT_HOME_INT>) _param_dyt_home_interval_ms,
+		(ParamFloat<px4::params::DYT_HOME_YAW>) _param_dyt_home_yaw_deg,
+		(ParamFloat<px4::params::DYT_HOME_PIT>) _param_dyt_home_pitch_deg
 	);
 };
 
@@ -214,6 +228,15 @@ void DytGimbal::show_status()
 		 static_cast<unsigned>((_last_target.status2 & (1 << 3)) != 0),
 		 static_cast<unsigned>((_last_target.status2 & (1 << 1)) != 0),
 		 static_cast<double>(math::degrees(_last_target.gimbal_yaw_rad)));
+	PX4_INFO("startup home: en=%ld sent=%u canceled=%u count=%lu yaw=%.1f pitch=%.1f next=%.3f s",
+		 static_cast<long>(_param_dyt_home_en.get()),
+		 static_cast<unsigned>(_startup_home_sent),
+		 static_cast<unsigned>(_startup_home_canceled),
+		 static_cast<unsigned long>(_startup_home_count),
+		 static_cast<double>(_param_dyt_home_yaw_deg.get()),
+		 static_cast<double>(_param_dyt_home_pitch_deg.get()),
+		 static_cast<double>(_startup_home_next_time > 0 && hrt_absolute_time() < _startup_home_next_time ?
+			(_startup_home_next_time - hrt_absolute_time()) * 1e-6 : 0.0));
 	PX4_INFO("debug log period: %ld ms", static_cast<long>(_param_dyt_log_ms.get()));
 	PX4_INFO("raw frame log: %ld", static_cast<long>(_param_dyt_rawlog.get()));
 	PX4_INFO("last rx: %.3f s", static_cast<double>(_last_rx_time > 0 ?
@@ -251,6 +274,7 @@ void DytGimbal::Run()
 
 	read_serial();
 	handle_command_updates();
+	send_startup_home_if_needed(now);
 
 	const hrt_abstime timeout_us = static_cast<hrt_abstime>(_param_dyt_timeout_ms.get()) * 1000ULL;
 	const hrt_abstime timeout_check_time = hrt_absolute_time();
@@ -288,6 +312,14 @@ bool DytGimbal::open_serial()
 	}
 
 	PX4_INFO("opened %s @ %ld", _device_path, static_cast<long>(_param_dyt_baud.get()));
+	const int32_t delay_ms = math::constrain(_param_dyt_home_delay_ms.get(), int32_t{0}, int32_t{30000});
+	const int32_t duration_ms = math::constrain(_param_dyt_home_duration_ms.get(), int32_t{0}, int32_t{30000});
+	_startup_home_time = hrt_absolute_time() + static_cast<hrt_abstime>(delay_ms) * 1000ULL;
+	_startup_home_end_time = _startup_home_time + static_cast<hrt_abstime>(duration_ms) * 1000ULL;
+	_startup_home_next_time = _startup_home_time;
+	_startup_home_sent = false;
+	_startup_home_canceled = false;
+	_startup_home_count = 0;
 	return true;
 }
 
@@ -297,6 +329,13 @@ void DytGimbal::close_serial()
 		::close(_uart_fd);
 		_uart_fd = -1;
 	}
+
+	_startup_home_time = 0;
+	_startup_home_end_time = 0;
+	_startup_home_next_time = 0;
+	_startup_home_sent = false;
+	_startup_home_canceled = false;
+	_startup_home_count = 0;
 }
 
 speed_t DytGimbal::baud_to_speed(int baud) const
@@ -903,7 +942,36 @@ void DytGimbal::handle_command_updates()
 	dyt_command_s cmd{};
 
 	while (_dyt_command_sub.update(&cmd)) {
+		_startup_home_canceled = true;
 		send_protocol_command(cmd);
+	}
+}
+
+void DytGimbal::send_startup_home_if_needed(hrt_abstime now)
+{
+	if (_startup_home_sent || _startup_home_canceled || _uart_fd < 0 || _param_dyt_home_en.get() == 0) {
+		return;
+	}
+
+	if (_startup_home_time == 0 || _startup_home_next_time == 0 || now < _startup_home_next_time) {
+		return;
+	}
+
+	const int16_t yaw_cmd = angle_deg_to_cdeg(_param_dyt_home_yaw_deg.get());
+	const int16_t pitch_cmd = angle_deg_to_cdeg(_param_dyt_home_pitch_deg.get());
+	send_command_frame(0x26, yaw_cmd, pitch_cmd, 0, 0);
+	++_startup_home_count;
+
+	PX4_INFO("startup home angle sent yaw=%.1f pitch=%.1f count=%lu",
+		 static_cast<double>(yaw_cmd) * 0.01,
+		 static_cast<double>(pitch_cmd) * 0.01,
+		 static_cast<unsigned long>(_startup_home_count));
+
+	const int32_t interval_ms = math::constrain(_param_dyt_home_interval_ms.get(), int32_t{100}, int32_t{5000});
+	_startup_home_next_time = now + static_cast<hrt_abstime>(interval_ms) * 1000ULL;
+
+	if (_startup_home_end_time == 0 || _startup_home_next_time > _startup_home_end_time) {
+		_startup_home_sent = true;
 	}
 }
 
@@ -999,6 +1067,16 @@ void DytGimbal::send_center_sequence()
 	send_command_frame(0x2B, 0, 0, 0, 0);
 	usleep(CENTER_SEQUENCE_DELAY_US);
 	send_command_frame(0x30, 0, 0, 0, 0);
+}
+
+int16_t DytGimbal::angle_deg_to_cdeg(float angle_deg) const
+{
+	if (!PX4_ISFINITE(angle_deg)) {
+		angle_deg = 0.f;
+	}
+
+	const float limited_deg = math::constrain(angle_deg, -180.f, 180.f);
+	return static_cast<int16_t>(roundf(limited_deg * 100.f));
 }
 
 bool DytGimbal::write_command_buffer(const uint8_t *buffer, size_t buffer_len)

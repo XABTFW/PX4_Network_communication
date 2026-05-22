@@ -52,3 +52,79 @@ PARAM_DEFINE_INT32(DYT_LOG_MS, 0);
  * @group DYT Gimbal
  */
 PARAM_DEFINE_INT32(DYT_RAWLOG, 0);
+
+/**
+ * DYT startup home command enable
+ *
+ * Sends frame-angle commands after the serial link opens so the gimbal moves
+ * from its power-on centered position to the configured startup view.
+ *
+ * @boolean
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_INT32(DYT_HOME_EN, 1);
+
+/**
+ * DYT startup home command delay
+ *
+ * Delay after opening the serial link before sending the startup frame-angle
+ * command. This gives the gimbal time to finish its own power-on centering.
+ *
+ * @unit ms
+ * @min 0
+ * @max 30000
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_INT32(DYT_HOME_DLY, 3000);
+
+/**
+ * DYT startup home command duration
+ *
+ * Duration over which the startup frame-angle command is resent. Repeating the
+ * command helps if the gimbal is still completing its own power-on sequence.
+ *
+ * @unit ms
+ * @min 0
+ * @max 30000
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_INT32(DYT_HOME_DUR, 10000);
+
+/**
+ * DYT startup home command interval
+ *
+ * Interval between repeated startup frame-angle commands.
+ *
+ * @unit ms
+ * @min 100
+ * @max 5000
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_INT32(DYT_HOME_INT, 500);
+
+/**
+ * DYT startup home yaw angle
+ *
+ * Frame yaw angle sent by the startup home command.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_FLOAT(DYT_HOME_YAW, 0.f);
+
+/**
+ * DYT startup home pitch angle
+ *
+ * Frame pitch angle sent by the startup home command. Positive pitch is up for
+ * the DYT frame-angle command.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_FLOAT(DYT_HOME_PIT, -45.f);

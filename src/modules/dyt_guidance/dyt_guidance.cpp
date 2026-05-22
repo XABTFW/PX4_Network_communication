@@ -50,6 +50,7 @@ public:
 	static int print_usage(const char *reason = nullptr);
 
 	bool init();
+	int print_status() override;
 	void show_status();
 
 private:
@@ -143,6 +144,8 @@ private:
 	TrackProfile intercept_profile() const;
 
 	void send_dyt_command(uint8_t command, int16_t param_x = 0, int16_t param_y = 0, uint8_t param3 = 0, int8_t zoom_rate = 0);
+	void send_home_angle_command();
+	int16_t angle_deg_to_cdeg(float angle_deg) const;
 	void retry_autolock(hrt_abstime now);
 	bool update_hint_autolock(hrt_abstime now);
 	bool handle_lock_candidate_or_timeout(hrt_abstime now);
@@ -159,6 +162,7 @@ private:
 	uint8_t _last_command{dyt_command_s::CMD_NONE};
 
 	bool _prev_activation_request{false};
+	bool _manual_activation{false};
 	bool _payload_lock_seen{false};
 	bool _payload_lost_hold{false};
 	int _lock_streak{0};
@@ -172,6 +176,7 @@ private:
 	hrt_abstime _state_enter_time{0};
 	hrt_abstime _payload_lost_enter_time{0};
 	hrt_abstime _last_offboard_request{0};
+	hrt_abstime _last_home_command_time{0};
 	hrt_abstime _last_retrigger_time{0};
 	hrt_abstime _last_hint_lock_time{0};
 	hrt_abstime _search_pause_until{0};
@@ -274,7 +279,9 @@ private:
 		(ParamInt<px4::params::DYTG_YSIGN>) _param_yaw_sign,
 		(ParamFloat<px4::params::DYTG_ROFF>) _param_roll_off_deg,
 		(ParamFloat<px4::params::DYTG_POFF>) _param_pitch_off_deg,
-		(ParamFloat<px4::params::DYTG_YOFF>) _param_yaw_off_deg
+		(ParamFloat<px4::params::DYTG_YOFF>) _param_yaw_off_deg,
+		(ParamFloat<px4::params::DYT_HOME_YAW>) _param_home_yaw_deg,
+		(ParamFloat<px4::params::DYT_HOME_PIT>) _param_home_pitch_deg
 	);
 };
 
@@ -291,6 +298,12 @@ bool DytGuidance::init()
 	return true;
 }
 
+int DytGuidance::print_status()
+{
+	show_status();
+	return PX4_OK;
+}
+
 void DytGuidance::show_status()
 {
 	PX4_INFO("state: %u", static_cast<unsigned>(_state));
@@ -302,6 +315,7 @@ void DytGuidance::show_status()
 	PX4_INFO("payload lost hold: %d", _payload_lost_hold);
 	PX4_INFO("preconditions ok: %d", preconditions_ok());
 	PX4_INFO("activation request: %d", activation_requested());
+	PX4_INFO("manual activation: %d", _manual_activation);
 	PX4_INFO("activation aux value: %.2f", static_cast<double>(aux_value(_param_act_aux.get())));
 	PX4_INFO("activation button: %ld buttons=0x%04x",
 		 static_cast<long>(_param_act_btn.get()), static_cast<unsigned>(_manual_control.buttons));
@@ -314,6 +328,9 @@ void DytGuidance::show_status()
 		 static_cast<unsigned>(_manual_control.sticks_moving));
 	PX4_INFO("activation aux: %ld", static_cast<long>(_param_act_aux.get()));
 	PX4_INFO("intercept aux: %ld", static_cast<long>(_param_int_aux.get()));
+	PX4_INFO("home angle: yaw=%.1f pitch=%.1f",
+		 static_cast<double>(_param_home_yaw_deg.get()),
+		 static_cast<double>(_param_home_pitch_deg.get()));
 	PX4_INFO("command pubs: %lu", static_cast<unsigned long>(_command_pub_count));
 	PX4_INFO("last command: %u", static_cast<unsigned>(_last_command));
 	PX4_INFO("last command age: %.3f s", static_cast<double>(_last_command_time > 0 ?
@@ -382,7 +399,8 @@ bool DytGuidance::payload_switch_active() const
 
 bool DytGuidance::activation_requested() const
 {
-	return aux_switch_active(_param_act_aux.get()) || button_active(_param_act_btn.get()) || payload_switch_active();
+	return _manual_activation || aux_switch_active(_param_act_aux.get()) || button_active(_param_act_btn.get())
+	       || payload_switch_active();
 }
 
 bool DytGuidance::preconditions_ok() const
@@ -567,8 +585,9 @@ bool DytGuidance::target_geometry_valid(const dyt_target_s &target) const
 			       && fabsf(target.los_y_rad) <= TARGET_MAX_LOS_RAD;
 	const bool yaw_valid = PX4_ISFINITE(target.gimbal_yaw_rad)
 			       && fabsf(target.gimbal_yaw_rad) <= TARGET_MAX_GIMBAL_YAW_RAD;
+	const bool locked = target.tracking_state == dyt_target_s::TRACKING_STATE_LOCKED && target.target_valid;
 
-	return bbox_valid && los_valid && yaw_valid;
+	return los_valid && yaw_valid && (locked || bbox_valid);
 }
 
 bool DytGuidance::target_geometry_valid() const
@@ -859,6 +878,7 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_candidate_ignored_sample_time = 0;
 	} else if (new_state == TaskState::LostHold) {
 		_relock_streak = 0;
+		_last_home_command_time = 0;
 		_last_retrigger_time = 0;
 		_last_hint_lock_time = 0;
 		_candidate_lock_active = false;
@@ -867,7 +887,11 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_candidate_ignored_sample_time = 0;
 		clear_observations();
 		capture_hold_setpoint();
-		send_dyt_command(dyt_command_s::CMD_CENTER_GIMBAL);
+
+		if (lost_reason != dyt_guidance_status_s::LOST_REASON_TIMEOUT) {
+			send_home_angle_command();
+		}
+
 		reset_search_scan(_state_enter_time);
 	} else if (new_state == TaskState::Idle) {
 		clear_observations();
@@ -875,6 +899,7 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_acceleration_sp.zero();
 		_yaw_sp = NAN;
 		_yaw_rate_sp = NAN;
+		_last_home_command_time = 0;
 		_next_scan_time = 0;
 		_candidate_lock_active = false;
 		_candidate_lock_start_time = 0;
@@ -893,14 +918,14 @@ void DytGuidance::activate_guidance(hrt_abstime now)
 	_payload_lock_seen = false;
 	_payload_lost_hold = false;
 	_payload_lost_enter_time = 0;
-	_last_retrigger_time = now;
+	_last_home_command_time = 0;
+	_last_retrigger_time = 0;
 	_last_hint_lock_time = 0;
 	_search_pause_until = 0;
 	_next_scan_time = 0;
-	send_dyt_command(dyt_command_s::CMD_AUTO_LOCK, -100);
 
 	if (!preconditions_ok()) {
-		PX4_WARN("DYT guidance preconditions not met, lock command sent only");
+		PX4_WARN("DYT guidance preconditions not met");
 		return;
 	}
 
@@ -915,6 +940,7 @@ void DytGuidance::deactivate_guidance(uint8_t lost_reason)
 	_payload_lock_seen = false;
 	_payload_lost_hold = false;
 	_payload_lost_enter_time = 0;
+	_last_home_command_time = 0;
 	_last_retrigger_time = 0;
 	_last_hint_lock_time = 0;
 	_search_pause_until = 0;
@@ -939,11 +965,19 @@ void DytGuidance::enter_lost_hold(uint8_t lost_reason)
 
 bool DytGuidance::update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_time)
 {
+	constexpr hrt_abstime HOME_COMMAND_INTERVAL{200_ms};
+	const bool home_command_enabled = _state != TaskState::LostHold
+					  || _lost_reason != dyt_guidance_status_s::LOST_REASON_TIMEOUT;
 	const hrt_abstime enter_time = lost_enter_time > 0 ? lost_enter_time : _state_enter_time;
 	const int32_t center_ms = math::max(_param_center_ms.get(), int32_t{0});
 	const hrt_abstime center_delay = static_cast<hrt_abstime>(center_ms) * 1000ULL;
 
 	if ((now - enter_time) < center_delay) {
+		if (home_command_enabled &&
+		    (_last_home_command_time == 0 || (now - _last_home_command_time) >= HOME_COMMAND_INTERVAL)) {
+			send_home_angle_command();
+		}
+
 		return true;
 	}
 
@@ -969,16 +1003,20 @@ void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
 	if (!_payload_lost_hold) {
 		_payload_lost_hold = true;
 		_payload_lost_enter_time = now;
+		_last_home_command_time = 0;
 		_last_retrigger_time = 0;
 		_last_hint_lock_time = 0;
 		_search_pause_until = 0;
 		clear_observations();
-		send_dyt_command(dyt_command_s::CMD_CENTER_GIMBAL);
+		send_home_angle_command();
 		reset_search_scan(now);
 	}
 
 	if (!update_lost_reacquire(now, _payload_lost_enter_time)) {
-		update_search_scan(now);
+		// Search scan is disabled: after recentering, only lock a target visible at home.
+		if (target_lock_candidate()) {
+			update_hint_autolock(now);
+		}
 	}
 }
 
@@ -995,6 +1033,24 @@ void DytGuidance::send_dyt_command(uint8_t command, int16_t param_x, int16_t par
 	_last_command = command;
 	_last_command_time = msg.timestamp;
 	++_command_pub_count;
+}
+
+void DytGuidance::send_home_angle_command()
+{
+	const int16_t yaw_cmd = angle_deg_to_cdeg(_param_home_yaw_deg.get());
+	const int16_t pitch_cmd = angle_deg_to_cdeg(_param_home_pitch_deg.get());
+	send_dyt_command(dyt_command_s::CMD_CENTER_GIMBAL, yaw_cmd, pitch_cmd);
+	_last_home_command_time = hrt_absolute_time();
+}
+
+int16_t DytGuidance::angle_deg_to_cdeg(float angle_deg) const
+{
+	if (!PX4_ISFINITE(angle_deg)) {
+		angle_deg = 0.f;
+	}
+
+	const float limited_deg = math::constrain(angle_deg, -180.f, 180.f);
+	return static_cast<int16_t>(roundf(limited_deg * 100.f));
 }
 
 void DytGuidance::retry_autolock(hrt_abstime now)
@@ -1301,8 +1357,6 @@ void DytGuidance::Run()
 				update_hint_autolock(now);
 				_search_pause_until = now + 1200_ms;
 				_next_scan_time = now + 100_ms;
-			} else {
-				retry_autolock(now);
 			}
 
 			if ((now - _state_enter_time) > static_cast<hrt_abstime>(_param_wait_ms.get()) * 1000ULL) {
@@ -1367,11 +1421,9 @@ void DytGuidance::Run()
 			if (center_done && lost_timeout > 0 && (now - _state_enter_time) > center_delay + lost_timeout) {
 				abort_guidance(_lost_reason);
 			} else if (center_done) {
-				update_search_scan(now);
-
-				// 只有没有候选目标时才普通 retry
-				if (!target_lock_candidate()) {
-					retry_autolock(now);
+				// Search scan is disabled: stay centered and lock only when a target is visible at home.
+				if (target_lock_candidate()) {
+					update_hint_autolock(now);
 				}
 			}
 		}
@@ -1433,6 +1485,17 @@ int DytGuidance::custom_command(int argc, char *argv[])
 		return PX4_OK;
 	}
 
+	if (!strcmp(argv[0], "activate")) {
+		get_instance()->_manual_activation = true;
+		get_instance()->_prev_activation_request = false;
+		return PX4_OK;
+	}
+
+	if (!strcmp(argv[0], "deactivate")) {
+		get_instance()->_manual_activation = false;
+		return PX4_OK;
+	}
+
 	if (!strcmp(argv[0], "retrigger")) {
 		get_instance()->send_dyt_command(dyt_command_s::CMD_RETRIGGER, -100);
 		return PX4_OK;
@@ -1458,6 +1521,8 @@ and publishes offboard trajectory setpoints for follow and intercept behaviors.
 	PRINT_MODULE_USAGE_NAME("dyt_guidance", "controller");
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_COMMAND("status");
+	PRINT_MODULE_USAGE_COMMAND("activate");
+	PRINT_MODULE_USAGE_COMMAND("deactivate");
 	PRINT_MODULE_USAGE_COMMAND("retrigger");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 	return 0;
