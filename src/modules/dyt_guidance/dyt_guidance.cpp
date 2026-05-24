@@ -148,6 +148,7 @@ private:
 	int16_t angle_deg_to_cdeg(float angle_deg) const;
 	void retry_autolock(hrt_abstime now);
 	bool update_hint_autolock(hrt_abstime now);
+	void update_auto_activation(hrt_abstime now);
 	bool handle_lock_candidate_or_timeout(hrt_abstime now);
 	void reset_search_scan(hrt_abstime now);
 	void update_search_scan(hrt_abstime now);
@@ -168,6 +169,7 @@ private:
 	int _lock_streak{0};
 	int _relock_streak{0};
 	int _lost_streak{0};
+	int _auto_lock_streak{0};
 	ScanRegion _scan_region{ScanRegion::Center};
 	int _scan_center_passes{0};
 	int _scan_row{0};
@@ -185,6 +187,7 @@ private:
 	hrt_abstime _candidate_lock_start_time{0};
 	hrt_abstime _candidate_ignore_until{0};
 	hrt_abstime _candidate_ignored_sample_time{0};
+	hrt_abstime _auto_lock_last_sample_time{0};
 	bool _candidate_lock_active{false};
 	uint32_t _command_pub_count{0};
 	float _scan_yaw_deg{0.f};
@@ -238,6 +241,8 @@ private:
 		(ParamInt<px4::params::DYTG_ACT_BTN>) _param_act_btn,
 		(ParamInt<px4::params::DYTG_INT_AUX>) _param_int_aux,
 		(ParamFloat<px4::params::DYTG_STK_TK>) _param_stick_takeover,
+		(ParamInt<px4::params::DYTG_AUTO_EN>) _param_auto_enable,
+		(ParamInt<px4::params::DYTG_AUTO_N>) _param_auto_frames,
 		(ParamInt<px4::params::DYTG_LOCK_N>) _param_lock_frames,
 		(ParamInt<px4::params::DYTG_RELOCKN>) _param_relock_frames,
 		(ParamInt<px4::params::DYTG_WAITMS>) _param_wait_ms,
@@ -320,6 +325,8 @@ void DytGuidance::show_status()
 	PX4_INFO("activation button: %ld buttons=0x%04x",
 		 static_cast<long>(_param_act_btn.get()), static_cast<unsigned>(_manual_control.buttons));
 	PX4_INFO("payload switch: %u", static_cast<unsigned>(_manual_switches.payload_power_switch));
+	PX4_INFO("auto activation: en=%ld streak=%d/%ld",
+		 static_cast<long>(_param_auto_enable.get()), _auto_lock_streak, static_cast<long>(_param_auto_frames.get()));
 	PX4_INFO("manual valid: %u roll=%.2f pitch=%.2f yaw=%.2f sticks=%u",
 		 static_cast<unsigned>(_manual_control.valid),
 		 static_cast<double>(_manual_control.roll),
@@ -887,10 +894,14 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_lock_streak = 0;
 		_relock_streak = 0;
 		_last_hint_lock_time = 0;
+		_auto_lock_streak = 0;
+		_auto_lock_last_sample_time = 0;
 	} else if (new_state == TaskState::TrackFollow || new_state == TaskState::TrackIntercept) {
 		_next_scan_time = 0;
 		_search_pause_until = 0;
 		_lost_streak = 0;
+		_auto_lock_streak = 0;
+		_auto_lock_last_sample_time = 0;
 		_candidate_lock_active = false;
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
@@ -900,6 +911,8 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_last_home_command_time = 0;
 		_last_retrigger_time = 0;
 		_last_hint_lock_time = 0;
+		_auto_lock_streak = 0;
+		_auto_lock_last_sample_time = 0;
 		_candidate_lock_active = false;
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
@@ -920,11 +933,15 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_yaw_rate_sp = NAN;
 		_last_home_command_time = 0;
 		_next_scan_time = 0;
+		_auto_lock_streak = 0;
+		_auto_lock_last_sample_time = 0;
 		_candidate_lock_active = false;
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
 		_candidate_ignored_sample_time = 0;
 	} else if (new_state == TaskState::Abort) {
+		_auto_lock_streak = 0;
+		_auto_lock_last_sample_time = 0;
 		_candidate_lock_active = false;
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
@@ -1106,6 +1123,48 @@ bool DytGuidance::update_hint_autolock(hrt_abstime now)
 
 	// 虽然没到重发时间，但目标候选仍然存在，所以外层必须停止搜索
 	return true;
+}
+
+void DytGuidance::update_auto_activation(hrt_abstime now)
+{
+	if (_param_auto_enable.get() <= 0 || _state != TaskState::Idle || !preconditions_ok()) {
+		_auto_lock_streak = 0;
+		_auto_lock_last_sample_time = 0;
+		return;
+	}
+
+	if (!target_lock_candidate()) {
+		_auto_lock_streak = 0;
+		_auto_lock_last_sample_time = 0;
+		return;
+	}
+
+	if (_last_target.timestamp_sample == _auto_lock_last_sample_time) {
+		return;
+	}
+
+	_auto_lock_last_sample_time = _last_target.timestamp_sample;
+	++_auto_lock_streak;
+
+	const int32_t required_frames = math::constrain(_param_auto_frames.get(), int32_t{1}, int32_t{30});
+
+	if (_auto_lock_streak < required_frames) {
+		return;
+	}
+
+	if (!target_locked()) {
+		send_dyt_command(dyt_command_s::CMD_AUTO_LOCK, -100);
+	}
+
+	activate_guidance(now);
+
+	if (_state == TaskState::SearchWaitLock) {
+		_last_hint_lock_time = now;
+		_last_retrigger_time = now;
+	}
+
+	_auto_lock_streak = 0;
+	_auto_lock_last_sample_time = 0;
 }
 
 bool DytGuidance::handle_lock_candidate_or_timeout(hrt_abstime now)
@@ -1339,6 +1398,10 @@ void DytGuidance::Run()
 
 	if (!activation_request && _prev_activation_request) {
 		deactivate_guidance(dyt_guidance_status_s::LOST_REASON_PRECONDITION);
+	}
+
+	if (!activation_request) {
+		update_auto_activation(now);
 	}
 
 	_prev_activation_request = activation_request;

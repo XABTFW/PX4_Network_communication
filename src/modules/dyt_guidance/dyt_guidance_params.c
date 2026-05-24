@@ -50,6 +50,27 @@ PARAM_DEFINE_INT32(DYTG_INT_AUX, 2);
 PARAM_DEFINE_FLOAT(DYTG_STK_TK, 0.30f);
 
 /**
+ * Enable automatic guidance activation from detected target hints
+ *
+ * When enabled, guidance can arm its tracking workflow automatically after a
+ * target lock candidate is visible for DYTG_AUTO_N consecutive frames. Manual
+ * activation using AUX/button/payload switch remains available.
+ *
+ * @boolean
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_INT32(DYTG_AUTO_EN, 0);
+
+/**
+ * Consecutive candidate frames for automatic guidance activation
+ *
+ * @min 1
+ * @max 30
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_INT32(DYTG_AUTO_N, 5);
+
+/**
  * Consecutive lock frames to enter tracking
  *
  * @min 1
