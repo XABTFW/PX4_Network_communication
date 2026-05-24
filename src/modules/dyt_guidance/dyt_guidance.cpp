@@ -722,19 +722,29 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	}
 
 	Vector2f horizontal_los(_los_ned(0), _los_ned(1));
-	Vector2f horizontal_dir(1.f, 0.f);
+	const float los_xy_norm = horizontal_los.norm();
+	constexpr float xy_deadband{0.15f};
+	constexpr float xy_full{0.60f};
+	float xy_scale{0.f};
 
-	if (horizontal_los.norm() > 1e-3f) {
-		horizontal_dir = horizontal_los.normalized();
+	if (los_xy_norm > xy_deadband) {
+		xy_scale = math::constrain((los_xy_norm - xy_deadband) / (xy_full - xy_deadband), 0.f, 1.f);
 	}
 
-	_velocity_sp(0) = horizontal_dir(0) * profile.v_cmd;
-	_velocity_sp(1) = horizontal_dir(1) * profile.v_cmd;
+	Vector2f vel_xy(0.f, 0.f);
+
+	if (los_xy_norm > 1e-3f) {
+		const Vector2f horizontal_dir = horizontal_los / los_xy_norm;
+		vel_xy = horizontal_dir * profile.v_cmd * xy_scale;
+	}
+
+	_velocity_sp(0) = vel_xy(0);
+	_velocity_sp(1) = vel_xy(1);
 	const float z_scale = math::constrain(_param_z_scale.get(), 0.f, 1.f);
 	const float max_dz = math::max(_param_max_dz.get(), 0.1f);
 	_velocity_sp(2) = math::constrain(_los_ned(2) * profile.v_cmd * z_scale, -max_dz, max_dz);
 
-	Vector2f vel_xy(_velocity_sp(0), _velocity_sp(1));
+	vel_xy = Vector2f(_velocity_sp(0), _velocity_sp(1));
 
 	if (vel_xy.norm() > _param_max_vel.get()) {
 		vel_xy = vel_xy.normalized() * _param_max_vel.get();
@@ -748,9 +758,16 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	const float closing_proxy = math::max(_param_vmin.get(), horizontal_vehicle_velocity.dot(_los_ned));
 	const Vector3f velocity_error = horizontal_velocity_sp - horizontal_vehicle_velocity;
 
-	_acceleration_sp = profile.nav_gain * closing_proxy * (_omega_los.cross(_los_ned))
-			   + profile.k_a * _los_ned
-			   + profile.k_v * velocity_error;
+	Vector3f pn_acc = profile.nav_gain * closing_proxy * (_omega_los.cross(_los_ned));
+	Vector3f los_acc = profile.k_a * _los_ned;
+	const Vector3f damp_acc = profile.k_v * velocity_error;
+
+	pn_acc(0) *= xy_scale;
+	pn_acc(1) *= xy_scale;
+	los_acc(0) *= xy_scale;
+	los_acc(1) *= xy_scale;
+
+	_acceleration_sp = pn_acc + los_acc + damp_acc;
 
 	Vector2f acc_xy(_acceleration_sp(0), _acceleration_sp(1));
 
@@ -762,19 +779,21 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 
 	_acceleration_sp(2) = 0.f;
 
+	constexpr float yaw_los_min{0.20f};
 	const float current_yaw = Eulerf(Quatf(_vehicle_attitude.q)).psi();
-	float desired_yaw = _hold_yaw;
 
-	if (horizontal_los.norm() > 1e-3f) {
-		desired_yaw = atan2f(_los_ned(1), _los_ned(0));
+	if (los_xy_norm <= yaw_los_min) {
+		_yaw_sp = current_yaw;
+		_yaw_rate_sp = 0.f;
+	} else {
+		const float desired_yaw = atan2f(_los_ned(1), _los_ned(0));
+		const float yaw_error = matrix::wrap_pi(desired_yaw - current_yaw);
+		const float yaw_limit = math::radians(_param_yaw_limit_deg.get());
+		_yaw_sp = matrix::wrap_pi(current_yaw + math::constrain(yaw_error, -yaw_limit, yaw_limit));
+		_yaw_rate_sp = math::constrain(yaw_error * 2.f,
+					       -math::radians(_param_max_yaw_rate_deg.get()),
+					       math::radians(_param_max_yaw_rate_deg.get()));
 	}
-
-	const float yaw_error = matrix::wrap_pi(desired_yaw - current_yaw);
-	const float yaw_limit = math::radians(_param_yaw_limit_deg.get());
-	_yaw_sp = matrix::wrap_pi(current_yaw + math::constrain(yaw_error, -yaw_limit, yaw_limit));
-	_yaw_rate_sp = math::constrain(yaw_error * 2.f,
-				       -math::radians(_param_max_yaw_rate_deg.get()),
-				       math::radians(_param_max_yaw_rate_deg.get()));
 
 	trajectory_setpoint_s setpoint{};
 	setpoint.timestamp = hrt_absolute_time();

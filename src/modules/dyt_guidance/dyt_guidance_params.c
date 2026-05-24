@@ -235,7 +235,7 @@ PARAM_DEFINE_FLOAT(DYTG_N_FOL, 2.0f);
  * @decimal 1
  * @group DYT Guidance
  */
-PARAM_DEFINE_FLOAT(DYTG_V_FOL, 3.0f);
+PARAM_DEFINE_FLOAT(DYTG_V_FOL, 2.0f);
 
 /**
  * Follow LOS acceleration gain
@@ -341,7 +341,7 @@ PARAM_DEFINE_FLOAT(DYTG_MAXACC, 4.0f);
  * @max 180
  * @group DYT Guidance
  */
-PARAM_DEFINE_FLOAT(DYTG_MAXYAWR, 60.f);
+PARAM_DEFINE_FLOAT(DYTG_MAXYAWR, 30.f);
 
 /**
  * Maximum yaw lag
@@ -362,7 +362,7 @@ PARAM_DEFINE_FLOAT(DYTG_YAWLIM, 25.f);
  * @decimal 1
  * @group DYT Guidance
  */
-PARAM_DEFINE_FLOAT(DYTG_MAXDZ, 1.5f);
+PARAM_DEFINE_FLOAT(DYTG_MAXDZ, 1.0f);
 
 /**
  * Vertical tracking scale
