@@ -1390,25 +1390,37 @@ void DytGuidance::Run()
 
 	const hrt_abstime now = hrt_absolute_time();
 	const bool activation_request = activation_requested();
+	const bool auto_activation_enabled = _param_auto_enable.get() > 0;
 	const bool intercept_request = aux_switch_active(_param_int_aux.get());
 
-	if (activation_request && !_prev_activation_request) {
-		activate_guidance(now);
-	}
+	if (auto_activation_enabled) {
+		if (activation_request) {
+			update_auto_activation(now);
 
-	if (!activation_request && _prev_activation_request) {
-		deactivate_guidance(dyt_guidance_status_s::LOST_REASON_PRECONDITION);
-	}
+		} else {
+			_auto_lock_streak = 0;
+			_auto_lock_last_sample_time = 0;
 
-	if (!activation_request) {
-		update_auto_activation(now);
+			if (_prev_activation_request) {
+				deactivate_guidance(dyt_guidance_status_s::LOST_REASON_PRECONDITION);
+			}
+		}
+
+	} else {
+		if (activation_request && !_prev_activation_request) {
+			activate_guidance(now);
+		}
+
+		if (!activation_request && _prev_activation_request) {
+			deactivate_guidance(dyt_guidance_status_s::LOST_REASON_PRECONDITION);
+		}
 	}
 
 	_prev_activation_request = activation_request;
 	_requested_submode = intercept_request ? dyt_guidance_status_s::SUBMODE_INTERCEPT :
 			     dyt_guidance_status_s::SUBMODE_FOLLOW;
 
-	if (activation_request && (_state == TaskState::Idle || _state == TaskState::Abort)) {
+	if (!auto_activation_enabled && activation_request && (_state == TaskState::Idle || _state == TaskState::Abort)) {
 		update_payload_only_reacquire(now);
 	}
 
