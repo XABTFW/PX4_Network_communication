@@ -396,6 +396,47 @@ PARAM_DEFINE_FLOAT(DYTG_MAXDZ, 1.0f);
 PARAM_DEFINE_FLOAT(DYTG_ZSCALE, 0.25f);
 
 /**
+ * Horizontal LOS deadband near vertical target
+ *
+ * @min 0.0
+ * @max 0.8
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_XYDB, 0.20f);
+
+/**
+ * Horizontal LOS value for full XY tracking
+ *
+ * @min 0.05
+ * @max 1.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_XYFULL, 0.60f);
+
+/**
+ * Minimum horizontal LOS for yaw tracking
+ *
+ * @min 0.01
+ * @max 1.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_YAWLOS, 0.20f);
+
+/**
+ * Horizontal velocity setpoint slew rate
+ *
+ * @unit m/s^2
+ * @min 0.1
+ * @max 20.0
+ * @decimal 1
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_XYSLEW, 3.0f);
+
+/**
  * Front cone half-angle for intercept
  *
  * @unit deg

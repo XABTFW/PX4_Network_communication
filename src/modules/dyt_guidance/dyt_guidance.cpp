@@ -219,6 +219,7 @@ private:
 	float _yaw_sp{NAN};
 	float _yaw_rate_sp{NAN};
 	hrt_abstime _prev_los_update{0};
+	hrt_abstime _last_track_setpoint_time{0};
 	bool _los_filter_initialized{false};
 
 	uORB::Subscription _dyt_target_sub{ORB_ID(dyt_target)};
@@ -274,6 +275,10 @@ private:
 		(ParamFloat<px4::params::DYTG_YAWLIM>) _param_yaw_limit_deg,
 		(ParamFloat<px4::params::DYTG_MAXDZ>) _param_max_dz,
 		(ParamFloat<px4::params::DYTG_ZSCALE>) _param_z_scale,
+		(ParamFloat<px4::params::DYTG_XYDB>) _param_xy_deadband,
+		(ParamFloat<px4::params::DYTG_XYFULL>) _param_xy_full,
+		(ParamFloat<px4::params::DYTG_YAWLOS>) _param_yaw_los_min,
+		(ParamFloat<px4::params::DYTG_XYSLEW>) _param_xy_slew_rate,
 		(ParamFloat<px4::params::DYTG_FCONE>) _param_front_cone_deg,
 		(ParamFloat<px4::params::DYTG_LPF_A>) _param_lpf_alpha,
 		(ParamFloat<px4::params::DYTG_PREDMAX>) _param_pred_max,
@@ -507,6 +512,7 @@ void DytGuidance::clear_observations()
 	_los_ned.zero();
 	_los_filter_initialized = false;
 	_prev_los_update = 0;
+	_last_track_setpoint_time = 0;
 }
 
 bool DytGuidance::update_los_estimate(hrt_abstime now)
@@ -695,6 +701,8 @@ DytGuidance::TrackProfile DytGuidance::intercept_profile() const
 
 void DytGuidance::publish_hold_setpoint()
 {
+	_last_track_setpoint_time = 0;
+
 	trajectory_setpoint_s setpoint{};
 	setpoint.timestamp = hrt_absolute_time();
 	_hold_position.copyTo(setpoint.position);
@@ -717,7 +725,9 @@ void DytGuidance::publish_hold_setpoint()
 
 void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 {
-	if (!update_los_estimate(hrt_absolute_time())) {
+	const hrt_abstime now = hrt_absolute_time();
+
+	if (!update_los_estimate(now)) {
 		publish_hold_setpoint();
 		return;
 	}
@@ -730,19 +740,42 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 
 	Vector2f horizontal_los(_los_ned(0), _los_ned(1));
 	const float los_xy_norm = horizontal_los.norm();
-	constexpr float xy_deadband{0.15f};
-	constexpr float xy_full{0.60f};
+	const float xy_deadband = math::constrain(_param_xy_deadband.get(), 0.f, 0.8f);
+	const float xy_full = math::constrain(_param_xy_full.get(), xy_deadband + 0.05f, 1.f);
 	float xy_scale{0.f};
 
 	if (los_xy_norm > xy_deadband) {
 		xy_scale = math::constrain((los_xy_norm - xy_deadband) / (xy_full - xy_deadband), 0.f, 1.f);
+		xy_scale = xy_scale * xy_scale * (3.f - 2.f * xy_scale);
 	}
 
-	Vector2f vel_xy(0.f, 0.f);
+	Vector2f vel_xy_raw(0.f, 0.f);
 
 	if (los_xy_norm > 1e-3f) {
 		const Vector2f horizontal_dir = horizontal_los / los_xy_norm;
-		vel_xy = horizontal_dir * profile.v_cmd * xy_scale;
+		vel_xy_raw = horizontal_dir * profile.v_cmd * xy_scale;
+	}
+
+	const float max_vel = math::max(_param_max_vel.get(), 0.1f);
+
+	if (vel_xy_raw.norm() > max_vel) {
+		vel_xy_raw = vel_xy_raw.normalized() * max_vel;
+	}
+
+	Vector2f vel_xy(vel_xy_raw);
+	Vector2f previous_vel_xy(_velocity_sp(0), _velocity_sp(1));
+
+	if (!PX4_ISFINITE(previous_vel_xy(0)) || !PX4_ISFINITE(previous_vel_xy(1))) {
+		previous_vel_xy.zero();
+	}
+
+	const float dt_sp = _last_track_setpoint_time > 0 ? math::constrain((now - _last_track_setpoint_time) * 1e-6f,
+			    0.005f, 0.1f) : 0.02f;
+	const float max_delta_xy = math::max(_param_xy_slew_rate.get(), 0.1f) * dt_sp;
+	const Vector2f delta_vel_xy = vel_xy_raw - previous_vel_xy;
+
+	if (delta_vel_xy.norm() > max_delta_xy) {
+		vel_xy = previous_vel_xy + delta_vel_xy.normalized() * max_delta_xy;
 	}
 
 	_velocity_sp(0) = vel_xy(0);
@@ -750,14 +783,7 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	const float z_scale = math::constrain(_param_z_scale.get(), 0.f, 1.f);
 	const float max_dz = math::max(_param_max_dz.get(), 0.1f);
 	_velocity_sp(2) = math::constrain(_los_ned(2) * profile.v_cmd * z_scale, -max_dz, max_dz);
-
-	vel_xy = Vector2f(_velocity_sp(0), _velocity_sp(1));
-
-	if (vel_xy.norm() > _param_max_vel.get()) {
-		vel_xy = vel_xy.normalized() * _param_max_vel.get();
-		_velocity_sp(0) = vel_xy(0);
-		_velocity_sp(1) = vel_xy(1);
-	}
+	_last_track_setpoint_time = now;
 
 	Vector3f horizontal_vehicle_velocity(vehicle_velocity(0), vehicle_velocity(1), 0.f);
 	Vector3f horizontal_velocity_sp(_velocity_sp(0), _velocity_sp(1), 0.f);
@@ -786,7 +812,7 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 
 	_acceleration_sp(2) = 0.f;
 
-	constexpr float yaw_los_min{0.20f};
+	const float yaw_los_min = math::constrain(_param_yaw_los_min.get(), 0.01f, 1.f);
 	const float current_yaw = Eulerf(Quatf(_vehicle_attitude.q)).psi();
 
 	if (los_xy_norm <= yaw_los_min) {
@@ -803,7 +829,7 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	}
 
 	trajectory_setpoint_s setpoint{};
-	setpoint.timestamp = hrt_absolute_time();
+	setpoint.timestamp = now;
 	setpoint.position[0] = NAN;
 	setpoint.position[1] = NAN;
 	setpoint.position[2] = NAN;
