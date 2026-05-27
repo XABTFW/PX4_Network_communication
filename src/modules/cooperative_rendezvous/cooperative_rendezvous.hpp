@@ -107,6 +107,8 @@ private:
 
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::CRDZ_ACT_AUX>) _param_act_aux,
-		(ParamInt<px4::params::CRDZ_ACT_BTN>) _param_act_btn
+		(ParamInt<px4::params::CRDZ_ACT_BTN>) _param_act_btn,
+		(ParamFloat<px4::params::CRDZ_DIST>) _param_dist,
+		(ParamFloat<px4::params::CRDZ_ALT_DIFF>) _param_alt_diff
 	)
 };

@@ -183,10 +183,28 @@ bool CooperativeRendezvous::target_position_local(const vehicle_local_position_s
 		return false;
 	}
 
-	target_position(0) = x + _options.target_offset(0);
-	target_position(1) = y + _options.target_offset(1);
+	float offset_x = _options.target_offset(0);
+	float offset_y = _options.target_offset(1);
+	const float target_distance = _param_dist.get();
+
+	if (PX4_ISFINITE(target_distance) && target_distance >= 0.f) {
+		const float offset_norm = sqrtf(offset_x * offset_x + offset_y * offset_y);
+
+		if (offset_norm > 0.001f) {
+			const float scale = target_distance / offset_norm;
+			offset_x *= scale;
+			offset_y *= scale;
+
+		} else {
+			offset_x = -target_distance;
+			offset_y = 0.f;
+		}
+	}
+
+	target_position(0) = x + offset_x;
+	target_position(1) = y + offset_y;
 	target_position(2) = (static_cast<float>(local_pos.ref_alt) - static_cast<float>(_target_info.alt)) +
-			     _options.target_offset(2);
+			     _options.target_offset(2) - _param_alt_diff.get();
 
 	return PX4_ISFINITE(target_position(2));
 }
@@ -444,11 +462,13 @@ int CooperativeRendezvous::print_status()
 		break;
 	}
 
-	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f)",
+	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) dist=%.1f alt_diff=%.1f",
 		 _vehicle_id, role, _options.target_id,
 		 (double)_options.target_offset(0),
 		 (double)_options.target_offset(1),
-		 (double)_options.target_offset(2));
+		 (double)_options.target_offset(2),
+		 (double)_param_dist.get(),
+		 (double)_param_alt_diff.get());
 	PX4_INFO("activation aux=%d enabled=%d dyt_active=%d",
 		 static_cast<int>(_param_act_aux.get()), rendezvous_switch_enabled(), dyt_guidance_active());
 	PX4_INFO("activation button=%d buttons=0x%04x",
