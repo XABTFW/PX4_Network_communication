@@ -275,6 +275,9 @@ private:
 		(ParamFloat<px4::params::DYTG_YAWLIM>) _param_yaw_limit_deg,
 		(ParamFloat<px4::params::DYTG_MAXDZ>) _param_max_dz,
 		(ParamFloat<px4::params::DYTG_ZSCALE>) _param_z_scale,
+		(ParamInt<px4::params::DYTG_ZXY_EN>) _param_zxy_enable,
+		(ParamFloat<px4::params::DYTG_ZXY_MIN>) _param_zxy_min_scale,
+		(ParamFloat<px4::params::DYTG_ZXY_FULL>) _param_zxy_full_los,
 		(ParamFloat<px4::params::DYTG_XYDB>) _param_xy_deadband,
 		(ParamFloat<px4::params::DYTG_XYFULL>) _param_xy_full,
 		(ParamFloat<px4::params::DYTG_YAWLOS>) _param_yaw_los_min,
@@ -749,11 +752,21 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 		xy_scale = xy_scale * xy_scale * (3.f - 2.f * xy_scale);
 	}
 
+	float zxy_scale{1.f};
+
+	if (_param_zxy_enable.get() > 0) {
+		const float zxy_min = math::constrain(_param_zxy_min_scale.get(), 0.f, 1.f);
+		const float zxy_full = math::constrain(_param_zxy_full_los.get(), 0.05f, 1.f);
+		float z_ratio = math::constrain(fabsf(_los_ned(2)) / zxy_full, 0.f, 1.f);
+		z_ratio = z_ratio * z_ratio * (3.f - 2.f * z_ratio);
+		zxy_scale = 1.f - (1.f - zxy_min) * z_ratio;
+	}
+
 	Vector2f vel_xy_raw(0.f, 0.f);
 
 	if (los_xy_norm > 1e-3f) {
 		const Vector2f horizontal_dir = horizontal_los / los_xy_norm;
-		vel_xy_raw = horizontal_dir * profile.v_cmd * xy_scale;
+		vel_xy_raw = horizontal_dir * profile.v_cmd * xy_scale * zxy_scale;
 	}
 
 	const float max_vel = math::max(_param_max_vel.get(), 0.1f);
@@ -799,6 +812,10 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	pn_acc(1) *= xy_scale;
 	los_acc(0) *= xy_scale;
 	los_acc(1) *= xy_scale;
+	pn_acc(0) *= zxy_scale;
+	pn_acc(1) *= zxy_scale;
+	los_acc(0) *= zxy_scale;
+	los_acc(1) *= zxy_scale;
 
 	_acceleration_sp = pn_acc + los_acc + damp_acc;
 

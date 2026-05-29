@@ -396,6 +396,44 @@ PARAM_DEFINE_FLOAT(DYTG_MAXDZ, 1.0f);
 PARAM_DEFINE_FLOAT(DYTG_ZSCALE, 0.25f);
 
 /**
+ * Enable vertical-priority XY scaling
+ *
+ * When enabled, horizontal tracking is reduced while the target is far above
+ * or below the vehicle LOS. This helps avoid flying past the target projection
+ * before vertical error has reduced.
+ *
+ * @boolean
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_INT32(DYTG_ZXY_EN, 0);
+
+/**
+ * Minimum XY scale during vertical-priority tracking
+ *
+ * Horizontal velocity and horizontal feedforward acceleration are never scaled
+ * below this fraction when vertical-priority XY scaling is enabled.
+ *
+ * @min 0.0
+ * @max 1.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_ZXY_MIN, 0.25f);
+
+/**
+ * Vertical LOS value for maximum XY reduction
+ *
+ * When vertical-priority XY scaling is enabled, XY reduction reaches
+ * DYTG_ZXY_MIN once abs(los_ned[2]) reaches this value.
+ *
+ * @min 0.05
+ * @max 1.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_ZXY_FULL, 0.70f);
+
+/**
  * Horizontal LOS deadband near vertical target
  *
  * @min 0.0
