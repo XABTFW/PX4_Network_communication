@@ -278,6 +278,13 @@ private:
 		(ParamInt<px4::params::DYTG_ZXY_EN>) _param_zxy_enable,
 		(ParamFloat<px4::params::DYTG_ZXY_MIN>) _param_zxy_min_scale,
 		(ParamFloat<px4::params::DYTG_ZXY_FULL>) _param_zxy_full_los,
+		(ParamInt<px4::params::DYTG_XYOVR_EN>) _param_xy_overshoot_enable,
+		(ParamFloat<px4::params::DYTG_XYOVR_Z>) _param_xy_overshoot_z,
+		(ParamFloat<px4::params::DYTG_XYOVR_V>) _param_xy_overshoot_speed,
+		(ParamFloat<px4::params::DYTG_XYOVR_MIN>) _param_xy_overshoot_min_scale,
+		(ParamInt<px4::params::DYTG_XYROT_EN>) _param_xy_turn_rate_enable,
+		(ParamFloat<px4::params::DYTG_XYROT_W>) _param_xy_turn_rate_full,
+		(ParamFloat<px4::params::DYTG_XYROT_MIN>) _param_xy_turn_rate_min_scale,
 		(ParamFloat<px4::params::DYTG_XYDB>) _param_xy_deadband,
 		(ParamFloat<px4::params::DYTG_XYFULL>) _param_xy_full,
 		(ParamFloat<px4::params::DYTG_YAWLOS>) _param_yaw_los_min,
@@ -763,10 +770,49 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	}
 
 	Vector2f vel_xy_raw(0.f, 0.f);
+	Vector2f horizontal_dir(0.f, 0.f);
 
 	if (los_xy_norm > 1e-3f) {
-		const Vector2f horizontal_dir = horizontal_los / los_xy_norm;
-		vel_xy_raw = horizontal_dir * profile.v_cmd * xy_scale * zxy_scale;
+		horizontal_dir = horizontal_los / los_xy_norm;
+	}
+
+	float xy_overshoot_scale{1.f};
+	float xy_turn_rate_scale{1.f};
+
+	if (_param_xy_overshoot_enable.get() > 0 && los_xy_norm > 1e-3f) {
+		const Vector2f vehicle_velocity_xy(vehicle_velocity(0), vehicle_velocity(1));
+		const float horizontal_closing_speed = vehicle_velocity_xy.dot(horizontal_dir);
+
+		if (horizontal_closing_speed < 0.f) {
+			const float overshoot_min = math::constrain(_param_xy_overshoot_min_scale.get(), 0.f, 1.f);
+			const float overshoot_z = math::constrain(_param_xy_overshoot_z.get(), 0.f, 0.95f);
+			const float overshoot_speed = math::max(_param_xy_overshoot_speed.get(), 0.1f);
+			float z_ratio = math::constrain((fabsf(_los_ned(2)) - overshoot_z) / (1.f - overshoot_z), 0.f, 1.f);
+			float reverse_ratio = math::constrain(-horizontal_closing_speed / overshoot_speed, 0.f, 1.f);
+			z_ratio = z_ratio * z_ratio * (3.f - 2.f * z_ratio);
+			reverse_ratio = reverse_ratio * reverse_ratio * (3.f - 2.f * reverse_ratio);
+			const float guard_ratio = z_ratio * reverse_ratio;
+			xy_overshoot_scale = 1.f - (1.f - overshoot_min) * guard_ratio;
+		}
+	}
+
+	if (_param_xy_turn_rate_enable.get() > 0 && los_xy_norm > 1e-3f) {
+		const float turn_rate_min = math::constrain(_param_xy_turn_rate_min_scale.get(), 0.f, 1.f);
+		const float turn_rate_full = math::max(_param_xy_turn_rate_full.get(), 0.1f);
+		const float overshoot_z = math::constrain(_param_xy_overshoot_z.get(), 0.f, 0.95f);
+		const float los_xy_sq = math::max(los_xy_norm * los_xy_norm, 0.05f);
+		float z_ratio = math::constrain((fabsf(_los_ned(2)) - overshoot_z) / (1.f - overshoot_z), 0.f, 1.f);
+		float turn_ratio = math::constrain(fabsf(_omega_los(2)) / los_xy_sq / turn_rate_full, 0.f, 1.f);
+		z_ratio = z_ratio * z_ratio * (3.f - 2.f * z_ratio);
+		turn_ratio = turn_ratio * turn_ratio * (3.f - 2.f * turn_ratio);
+		const float guard_ratio = z_ratio * turn_ratio;
+		xy_turn_rate_scale = 1.f - (1.f - turn_rate_min) * guard_ratio;
+	}
+
+	const float xy_guard_scale = xy_overshoot_scale * xy_turn_rate_scale;
+
+	if (los_xy_norm > 1e-3f) {
+		vel_xy_raw = horizontal_dir * profile.v_cmd * xy_scale * zxy_scale * xy_guard_scale;
 	}
 
 	const float max_vel = math::max(_param_max_vel.get(), 0.1f);
@@ -816,6 +862,10 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 	pn_acc(1) *= zxy_scale;
 	los_acc(0) *= zxy_scale;
 	los_acc(1) *= zxy_scale;
+	pn_acc(0) *= xy_guard_scale;
+	pn_acc(1) *= xy_guard_scale;
+	los_acc(0) *= xy_guard_scale;
+	los_acc(1) *= xy_guard_scale;
 
 	_acceleration_sp = pn_acc + los_acc + damp_acc;
 

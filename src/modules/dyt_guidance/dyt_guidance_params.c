@@ -434,6 +434,95 @@ PARAM_DEFINE_FLOAT(DYTG_ZXY_MIN, 0.25f);
 PARAM_DEFINE_FLOAT(DYTG_ZXY_FULL, 0.70f);
 
 /**
+ * Enable XY overshoot guard
+ *
+ * When enabled, horizontal tracking is reduced if the vehicle is moving away
+ * from the target horizontal LOS while the target is still far above or below.
+ *
+ * @boolean
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_INT32(DYTG_XYOVR_EN, 0);
+
+/**
+ * Vertical LOS threshold for XY overshoot guard
+ *
+ * XY overshoot protection starts once abs(los_ned[2]) is above this value.
+ *
+ * @min 0.0
+ * @max 1.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_XYOVR_Z, 0.75f);
+
+/**
+ * Reverse horizontal closing speed for full XY overshoot guard
+ *
+ * XY overshoot protection reaches DYTG_XYOVR_MIN once the vehicle is moving
+ * away from the target horizontal LOS by this speed.
+ *
+ * @unit m/s
+ * @min 0.1
+ * @max 20.0
+ * @decimal 1
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_XYOVR_V, 2.0f);
+
+/**
+ * Minimum XY scale during XY overshoot guard
+ *
+ * Horizontal velocity and horizontal feedforward acceleration are never scaled
+ * below this fraction when XY overshoot protection is active.
+ *
+ * @min 0.0
+ * @max 1.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_XYOVR_MIN, 0.15f);
+
+/**
+ * Enable XY LOS turn-rate guard
+ *
+ * When enabled, horizontal tracking is reduced before overshoot if horizontal
+ * LOS direction is rotating quickly while the target is still far above or
+ * below the vehicle.
+ *
+ * @boolean
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_INT32(DYTG_XYROT_EN, 0);
+
+/**
+ * Horizontal LOS turn rate for full XY guard
+ *
+ * The turn-rate guard reaches DYTG_XYROT_MIN when the horizontal LOS direction
+ * rotates at this rate.
+ *
+ * @unit rad/s
+ * @min 0.1
+ * @max 5.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_XYROT_W, 1.0f);
+
+/**
+ * Minimum XY scale during LOS turn-rate guard
+ *
+ * Horizontal velocity and horizontal feedforward acceleration are never scaled
+ * below this fraction when the turn-rate guard is active.
+ *
+ * @min 0.0
+ * @max 1.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_XYROT_MIN, 0.20f);
+
+/**
  * Horizontal LOS deadband near vertical target
  *
  * @min 0.0
