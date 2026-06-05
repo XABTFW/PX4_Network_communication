@@ -95,7 +95,12 @@ bool CooperativeRendezvous::rendezvous_switch_enabled() const
 
 bool CooperativeRendezvous::dyt_guidance_active() const
 {
-	return _dyt_guidance_status.active && _dyt_guidance_status.timestamp != 0 &&
+	// Yield to the seeker only while it is actually commanding aircraft motion
+	// (camera locked and tracking). While the seeker is just searching or has lost
+	// the target it controls the gimbal only, so the position-sharing follower keeps
+	// driving the aircraft. This is the single handoff boundary between the two
+	// controllers so they never publish trajectory setpoints at the same time.
+	return _dyt_guidance_status.controlling_vehicle && _dyt_guidance_status.timestamp != 0 &&
 	       hrt_elapsed_time(&_dyt_guidance_status.timestamp) < 500_ms;
 }
 

@@ -25,6 +25,7 @@ uint8 lost_reason
 
 bool active
 bool target_locked
+bool controlling_vehicle   # true when this module owns the trajectory/offboard setpoints (aircraft motion)
 bool target_fresh
 bool intercept_allowed
 
