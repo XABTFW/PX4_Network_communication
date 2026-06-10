@@ -33,7 +33,8 @@ PARAM_DEFINE_INT32(CRDZ_ACT_BTN, -1);
  * Horizontal distance from target
  *
  * Desired horizontal distance for the rendezvous aircraft relative to the
- * target aircraft. Negative values keep the startup offset from -d/-x/-y.
+ * target aircraft. Set to 0 to track the target position without a horizontal
+ * offset. Negative values keep the startup offset from -d/-x/-y.
  *
  * @unit m
  * @min -1
@@ -41,7 +42,7 @@ PARAM_DEFINE_INT32(CRDZ_ACT_BTN, -1);
  * @decimal 1
  * @group Cooperative Rendezvous
  */
-PARAM_DEFINE_FLOAT(CRDZ_DIST, -1.f);
+PARAM_DEFINE_FLOAT(CRDZ_DIST, 0.f);
 
 /**
  * Altitude difference from target

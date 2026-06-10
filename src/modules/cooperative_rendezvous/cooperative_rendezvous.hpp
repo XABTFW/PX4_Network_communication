@@ -71,7 +71,7 @@ private:
 	void run_rendezvous(const vehicle_local_position_s &local_pos, const vehicle_status_s &status);
 	void keep_current_position_setpoint(const vehicle_local_position_s &local_pos);
 	void publish_offboard_heartbeat(bool position_control, bool velocity_control);
-	void publish_trajectory_setpoint(const matrix::Vector3f &position, float yaw);
+	void publish_trajectory_setpoint(const matrix::Vector3f &position, const matrix::Vector3f &velocity, float yaw);
 	void request_offboard(const vehicle_status_s &status);
 	void request_arm(const vehicle_status_s &status);
 	void hold_position(const vehicle_local_position_s &local_pos);

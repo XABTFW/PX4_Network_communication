@@ -226,14 +226,15 @@ void CooperativeRendezvous::publish_offboard_heartbeat(bool position_control, bo
 	_offboard_control_mode_pub.publish(mode);
 }
 
-void CooperativeRendezvous::publish_trajectory_setpoint(const matrix::Vector3f &position, float yaw)
+void CooperativeRendezvous::publish_trajectory_setpoint(const matrix::Vector3f &position, const matrix::Vector3f &velocity,
+		float yaw)
 {
 	trajectory_setpoint_s setpoint{};
 	setpoint.timestamp = hrt_absolute_time();
 
 	for (int i = 0; i < 3; i++) {
 		setpoint.position[i] = position(i);
-		setpoint.velocity[i] = static_cast<float>(NAN);
+		setpoint.velocity[i] = velocity(i);
 		setpoint.acceleration[i] = static_cast<float>(NAN);
 		setpoint.jerk[i] = static_cast<float>(NAN);
 	}
@@ -351,9 +352,10 @@ void CooperativeRendezvous::hold_position(const vehicle_local_position_s &local_
 void CooperativeRendezvous::keep_current_position_setpoint(const vehicle_local_position_s &local_pos)
 {
 	const matrix::Vector3f position(local_pos.x, local_pos.y, local_pos.z);
+	const matrix::Vector3f velocity(0.f, 0.f, 0.f);
 
 	publish_offboard_heartbeat(true, false);
-	publish_trajectory_setpoint(position, local_pos.heading);
+	publish_trajectory_setpoint(position, velocity, local_pos.heading);
 }
 
 void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local_pos, const vehicle_status_s &status)
@@ -383,11 +385,29 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 	matrix::Vector3f current_position(local_pos.x, local_pos.y, local_pos.z);
 	matrix::Vector3f to_target = target_position - current_position;
 	const float distance = to_target.norm();
+	matrix::Vector3f target_velocity(static_cast<float>(_target_info.vx), static_cast<float>(_target_info.vy),
+					 static_cast<float>(_target_info.vz));
+
+	if (!PX4_ISFINITE(target_velocity(0)) || !PX4_ISFINITE(target_velocity(1)) || !PX4_ISFINITE(target_velocity(2))) {
+		target_velocity.zero();
+	}
+
+	matrix::Vector3f velocity_sp = target_velocity;
+	matrix::Vector2f horizontal_error(to_target(0), to_target(1));
+	const float horizontal_distance = horizontal_error.norm();
+	const float closing_speed = math::constrain(_options.max_speed, 0.5f, 20.f);
+
+	if (horizontal_distance > 0.5f) {
+		const float approach_speed = math::min(closing_speed, horizontal_distance);
+		const matrix::Vector2f approach_xy = horizontal_error / horizontal_distance * approach_speed;
+		velocity_sp(0) += approach_xy(0);
+		velocity_sp(1) += approach_xy(1);
+	}
 
 	const float yaw = PX4_ISFINITE(_target_info.yaw) ? static_cast<float>(_target_info.yaw) : local_pos.heading;
 
 	publish_offboard_heartbeat(true, false);
-	publish_trajectory_setpoint(target_position, yaw);
+	publish_trajectory_setpoint(target_position, velocity_sp, yaw);
 
 	request_arm(status);
 

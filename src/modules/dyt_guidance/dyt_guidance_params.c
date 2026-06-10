@@ -649,11 +649,14 @@ PARAM_DEFINE_INT32(DYTG_LXSIGN, 1);
 /**
  * LOS Y sign
  *
+ * The DYT V2.11 telemetry reports vertical miss angle as down-positive and up-negative,
+ * which already matches PX4 NED Z sign.
+ *
  * @value -1 Negative
  * @value 1 Positive
  * @group DYT Guidance
  */
-PARAM_DEFINE_INT32(DYTG_LYSIGN, -1);
+PARAM_DEFINE_INT32(DYTG_LYSIGN, 1);
 
 /**
  * Gimbal roll sign

@@ -1,0 +1,18 @@
+#!/bin/sh
+#
+# DYT serial camera integration for ZeroOne X6.
+# Assumes the camera is connected to TEL2, which maps to /dev/ttyS4.
+#
+
+dyt_gimbal start -d /dev/ttyS4
+dyt_guidance start
+
+if param compare MAV_SYS_ID 1
+then
+	cooperative_rendezvous start -r broadcast
+fi
+
+if param compare MAV_SYS_ID 2
+then
+	cooperative_rendezvous start -r rendezvous -t 1 -d 5
+fi
