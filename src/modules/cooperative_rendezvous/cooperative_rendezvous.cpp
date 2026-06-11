@@ -349,6 +349,51 @@ void CooperativeRendezvous::hold_position(const vehicle_local_position_s &local_
 	keep_current_position_setpoint(local_pos);
 }
 
+void CooperativeRendezvous::reset_rendezvous_activation()
+{
+	_rendezvous_active_since = 0;
+	_last_velocity_sp_time = 0;
+}
+
+matrix::Vector3f CooperativeRendezvous::limit_velocity_setpoint(const vehicle_local_position_s &local_pos,
+		const matrix::Vector3f &desired_velocity, hrt_abstime now)
+{
+	const float accel_limit = math::constrain(_param_acc_lim.get(), 0.f, 10.f);
+
+	if (accel_limit <= 0.01f) {
+		_last_velocity_sp = desired_velocity;
+		_last_velocity_sp_time = now;
+		return desired_velocity;
+	}
+
+	if (_last_velocity_sp_time == 0) {
+		matrix::Vector3f current_velocity(local_pos.vx, local_pos.vy, local_pos.vz);
+
+		if (!PX4_ISFINITE(current_velocity(0)) || !PX4_ISFINITE(current_velocity(1)) ||
+		    !PX4_ISFINITE(current_velocity(2))) {
+			current_velocity.zero();
+		}
+
+		_last_velocity_sp = current_velocity;
+		_last_velocity_sp_time = now;
+	}
+
+	const float dt = math::constrain((now - _last_velocity_sp_time) * 1e-6f, 0.f, 0.2f);
+	const float max_delta = accel_limit * dt;
+	const matrix::Vector3f delta = desired_velocity - _last_velocity_sp;
+	const float delta_norm = delta.norm();
+
+	if (delta_norm > max_delta && delta_norm > 0.001f) {
+		_last_velocity_sp += delta / delta_norm * max_delta;
+
+	} else {
+		_last_velocity_sp = desired_velocity;
+	}
+
+	_last_velocity_sp_time = now;
+	return _last_velocity_sp;
+}
+
 void CooperativeRendezvous::keep_current_position_setpoint(const vehicle_local_position_s &local_pos)
 {
 	const matrix::Vector3f position(local_pos.x, local_pos.y, local_pos.z);
@@ -378,8 +423,15 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 			_last_status_log = now;
 		}
 
+		reset_rendezvous_activation();
 		hold_position(local_pos);
 		return;
+	}
+
+	const hrt_abstime now = hrt_absolute_time();
+
+	if (_rendezvous_active_since == 0) {
+		_rendezvous_active_since = now;
 	}
 
 	matrix::Vector3f current_position(local_pos.x, local_pos.y, local_pos.z);
@@ -393,21 +445,29 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 	}
 
 	matrix::Vector3f velocity_sp = target_velocity;
-	matrix::Vector2f horizontal_error(to_target(0), to_target(1));
-	const float horizontal_distance = horizontal_error.norm();
-	const float closing_speed = math::constrain(_options.max_speed, 0.5f, 20.f);
+	const float ramp_time_s = math::constrain(_param_ramp_t.get(), 0.f, 10.f);
+	const float ramp = ramp_time_s > 0.01f ?
+			   math::constrain((now - _rendezvous_active_since) * 1e-6f / ramp_time_s, 0.f, 1.f) : 1.f;
+	const float closing_speed = math::constrain(_options.max_speed, 0.5f, 20.f) * ramp;
 
-	if (horizontal_distance > 0.5f) {
-		const float approach_speed = math::min(closing_speed, horizontal_distance);
-		const matrix::Vector2f approach_xy = horizontal_error / horizontal_distance * approach_speed;
-		velocity_sp(0) += approach_xy(0);
-		velocity_sp(1) += approach_xy(1);
+	if (distance > 0.5f && closing_speed > 0.f) {
+		const float approach_speed = math::min(closing_speed, distance);
+		velocity_sp += to_target / distance * approach_speed;
 	}
+
+	velocity_sp = limit_velocity_setpoint(local_pos, velocity_sp, now);
 
 	const float yaw = PX4_ISFINITE(_target_info.yaw) ? static_cast<float>(_target_info.yaw) : local_pos.heading;
 
-	publish_offboard_heartbeat(true, false);
-	publish_trajectory_setpoint(target_position, velocity_sp, yaw);
+	if (distance > 0.5f) {
+		const matrix::Vector3f position_sp(static_cast<float>(NAN), static_cast<float>(NAN), static_cast<float>(NAN));
+		publish_offboard_heartbeat(false, true);
+		publish_trajectory_setpoint(position_sp, velocity_sp, yaw);
+
+	} else {
+		publish_offboard_heartbeat(true, false);
+		publish_trajectory_setpoint(target_position, velocity_sp, yaw);
+	}
 
 	request_arm(status);
 
@@ -417,8 +477,6 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 	    status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_LAND) {
 		request_offboard(status);
 	}
-
-	const hrt_abstime now = hrt_absolute_time();
 
 	if (now - _last_status_log > 2_s) {
 		PX4_INFO("cooperative rendezvous: target=%" PRIu32 " distance=%.1fm setpoint=(%.1f %.1f %.1f)",
@@ -459,6 +517,7 @@ void CooperativeRendezvous::Run()
 
 	if (active_role() == Role::Rendezvous) {
 		if (!rendezvous_switch_enabled() || dyt_guidance_active()) {
+			reset_rendezvous_activation();
 			return;
 		}
 
@@ -487,13 +546,16 @@ int CooperativeRendezvous::print_status()
 		break;
 	}
 
-	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) dist=%.1f alt_diff=%.1f",
+	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32
+		 " offset=(%.1f %.1f %.1f) dist=%.1f alt_diff=%.1f ramp=%.1fs acc=%.1fm/s2",
 		 _vehicle_id, role, _options.target_id,
 		 (double)_options.target_offset(0),
 		 (double)_options.target_offset(1),
 		 (double)_options.target_offset(2),
 		 (double)_param_dist.get(),
-		 (double)_param_alt_diff.get());
+		 (double)_param_alt_diff.get(),
+		 (double)_param_ramp_t.get(),
+		 (double)_param_acc_lim.get());
 	PX4_INFO("activation aux=%d enabled=%d dyt_active=%d",
 		 static_cast<int>(_param_act_aux.get()), rendezvous_switch_enabled(), dyt_guidance_active());
 	PX4_INFO("activation button=%d buttons=0x%04x",

@@ -58,3 +58,31 @@ PARAM_DEFINE_FLOAT(CRDZ_DIST, 0.f);
  * @group Cooperative Rendezvous
  */
 PARAM_DEFINE_FLOAT(CRDZ_ALT_DIFF, 0.f);
+
+/**
+ * Approach speed ramp time
+ *
+ * Time used to ramp the rendezvous approach speed from zero after activation.
+ * This softens the first response when the follower is far from the target.
+ *
+ * @unit s
+ * @min 0
+ * @max 10
+ * @decimal 1
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_RAMP_T, 2.f);
+
+/**
+ * Velocity setpoint acceleration limit
+ *
+ * Limits how quickly the rendezvous velocity setpoint may change after
+ * activation. Set to 0 to disable this slew-rate limiter.
+ *
+ * @unit m/s^2
+ * @min 0
+ * @max 10
+ * @decimal 1
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_ACC_LIM, 1.5f);
