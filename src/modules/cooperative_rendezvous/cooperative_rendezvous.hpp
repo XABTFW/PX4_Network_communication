@@ -69,9 +69,6 @@ private:
 	bool update_target_from_link();
 	bool target_position_local(const vehicle_local_position_s &local_pos, matrix::Vector3f &target_position) const;
 	void run_rendezvous(const vehicle_local_position_s &local_pos, const vehicle_status_s &status);
-	void reset_rendezvous_activation();
-	matrix::Vector3f limit_velocity_setpoint(const vehicle_local_position_s &local_pos,
-			const matrix::Vector3f &desired_velocity, hrt_abstime now);
 	void keep_current_position_setpoint(const vehicle_local_position_s &local_pos);
 	void publish_offboard_heartbeat(bool position_control, bool velocity_control);
 	void publish_trajectory_setpoint(const matrix::Vector3f &position, const matrix::Vector3f &velocity, float yaw);
@@ -91,9 +88,6 @@ private:
 	hrt_abstime _last_mode_request{0};
 	hrt_abstime _last_arm_request{0};
 	hrt_abstime _last_status_log{0};
-	hrt_abstime _rendezvous_active_since{0};
-	hrt_abstime _last_velocity_sp_time{0};
-	matrix::Vector3f _last_velocity_sp{};
 	bool _failsafes_configured{false};
 
 	manual_control_setpoint_s _manual_control{};
@@ -115,8 +109,6 @@ private:
 		(ParamInt<px4::params::CRDZ_ACT_AUX>) _param_act_aux,
 		(ParamInt<px4::params::CRDZ_ACT_BTN>) _param_act_btn,
 		(ParamFloat<px4::params::CRDZ_DIST>) _param_dist,
-		(ParamFloat<px4::params::CRDZ_ALT_DIFF>) _param_alt_diff,
-		(ParamFloat<px4::params::CRDZ_RAMP_T>) _param_ramp_t,
-		(ParamFloat<px4::params::CRDZ_ACC_LIM>) _param_acc_lim
+		(ParamFloat<px4::params::CRDZ_ALT_DIFF>) _param_alt_diff
 	)
 };
