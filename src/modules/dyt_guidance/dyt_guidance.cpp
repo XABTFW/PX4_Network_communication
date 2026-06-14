@@ -24,9 +24,11 @@
 #include <uORB/topics/offboard_control_mode.h>
 #include <uORB/topics/parameter_update.h>
 #include <uORB/topics/trajectory_setpoint.h>
+#include <uORB/topics/airspeed_validated.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_command.h>
+#include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/vehicle_local_position.h>
 #include <uORB/topics/vehicle_status.h>
 
@@ -69,6 +71,8 @@ private:
 	static constexpr int MIDCOURSE_BURST_COUNT{3};
 	static constexpr hrt_abstime MIDCOURSE_BURST_INTERVAL{40_ms};
 	static constexpr hrt_abstime MIDCOURSE_HOLD_INTERVAL{100_ms};
+	static constexpr hrt_abstime MIDCOURSE_OWNSHIP_INTERVAL{40_ms};
+	static constexpr hrt_abstime MIDCOURSE_GEO_TARGET_INTERVAL{100_ms};
 	static constexpr int SEARCH_CENTER_PASSES{2};
 	static constexpr hrt_abstime MANUAL_TAKEOVER_GRACE{500_ms};
 
@@ -156,11 +160,17 @@ private:
 	TrackProfile intercept_profile() const;
 
 	void send_dyt_command(uint8_t command, int16_t param_x = 0, int16_t param_y = 0, uint8_t param3 = 0, int8_t zoom_rate = 0);
+	void send_dyt_ownship_state(hrt_abstime now);
+	void send_dyt_geo_track_target(hrt_abstime now, bool force = false);
+	void send_dyt_geo_track_exit();
 	void send_home_angle_command();
 	int16_t angle_deg_to_cdeg(float angle_deg) const;
+	bool global_position_valid() const;
 	bool local_position_global_valid() const;
+	bool midcourse_target_geo_valid() const;
 	bool midcourse_target_position_local(Vector3f &target_position) const;
 	bool compute_midcourse_gimbal_angle(float &yaw_deg, float &pitch_deg) const;
+	bool update_midcourse_geo_tracking(hrt_abstime now, bool force = false);
 	bool update_midcourse_gimbal_pointing(hrt_abstime now, bool force = false);
 	void retry_autolock(hrt_abstime now);
 	bool update_hint_autolock(hrt_abstime now);
@@ -211,9 +221,12 @@ private:
 	float _scan_pitch_deg{0.f};
 	hrt_abstime _next_midcourse_point_time{0};
 	hrt_abstime _last_midcourse_point_time{0};
+	hrt_abstime _last_midcourse_ownship_time{0};
+	hrt_abstime _last_midcourse_geo_target_time{0};
 	float _midcourse_yaw_deg{NAN};
 	float _midcourse_pitch_deg{NAN};
 	int _midcourse_burst_remaining{0};
+	bool _midcourse_geotrack_active{false};
 
 	LosObservation _observations[OBS_BUFFER_LEN]{};
 	int _observation_count{0};
@@ -226,9 +239,11 @@ private:
 	bool _vehicle_id_initialized{false};
 
 	vehicle_attitude_s _vehicle_attitude{};
+	vehicle_global_position_s _vehicle_global_position{};
 	vehicle_local_position_s _vehicle_local_position{};
 	vehicle_status_s _vehicle_status{};
 	vehicle_angular_velocity_s _vehicle_angular_velocity{};
+	airspeed_validated_s _airspeed_validated{};
 	manual_control_setpoint_s _manual_control{};
 	manual_control_switches_s _manual_switches{};
 
@@ -251,9 +266,11 @@ private:
 	uORB::Subscription _dyt_target_sub{ORB_ID(dyt_target)};
 	uORB::Subscription _follower_info_sub{ORB_ID(follower_info)};
 	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
+	uORB::Subscription _vehicle_global_position_sub{ORB_ID(vehicle_global_position)};
 	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
+	uORB::Subscription _airspeed_validated_sub{ORB_ID(airspeed_validated)};
 	uORB::Subscription _manual_control_sub{ORB_ID(manual_control_setpoint)};
 	uORB::Subscription _manual_switches_sub{ORB_ID(manual_control_switches)};
 	uORB::SubscriptionInterval _parameter_update_sub{ORB_ID(parameter_update), 1_s};
@@ -366,6 +383,12 @@ void DytGuidance::show_status()
 		 static_cast<double>(_midcourse_yaw_deg),
 		 static_cast<double>(_midcourse_pitch_deg),
 		 _midcourse_burst_remaining);
+	PX4_INFO("midcourse geotrack: active=%d ownship_age=%.3f target_tx_age=%.3f",
+		 _midcourse_geotrack_active,
+		 static_cast<double>(_last_midcourse_ownship_time > 0 ?
+				     (hrt_absolute_time() - _last_midcourse_ownship_time) * 1e-6f : -1.f),
+		 static_cast<double>(_last_midcourse_geo_target_time > 0 ?
+				     (hrt_absolute_time() - _last_midcourse_geo_target_time) * 1e-6f : -1.f));
 	PX4_INFO("target fresh: %d", target_fresh());
 	PX4_INFO("target locked: %d", target_locked());
 	PX4_INFO("target geometry: %d", target_geometry_valid());
@@ -410,9 +433,11 @@ void DytGuidance::update_params_if_needed()
 void DytGuidance::update_subscriptions()
 {
 	_vehicle_attitude_sub.update(&_vehicle_attitude);
+	_vehicle_global_position_sub.update(&_vehicle_global_position);
 	_vehicle_local_position_sub.update(&_vehicle_local_position);
 	_vehicle_status_sub.update(&_vehicle_status);
 	_vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity);
+	_airspeed_validated_sub.update(&_airspeed_validated);
 	_manual_control_sub.update(&_manual_control);
 	_manual_switches_sub.update(&_manual_switches);
 
@@ -1096,6 +1121,7 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_midcourse_yaw_deg = NAN;
 		_midcourse_pitch_deg = NAN;
 	} else if (new_state == TaskState::TrackFollow || new_state == TaskState::TrackIntercept) {
+		send_dyt_geo_track_exit();
 		_next_scan_time = 0;
 		_search_pause_until = 0;
 		_next_midcourse_point_time = 0;
@@ -1128,12 +1154,13 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		capture_hold_setpoint();
 
 		if (lost_reason != dyt_guidance_status_s::LOST_REASON_TIMEOUT &&
-		    !update_midcourse_gimbal_pointing(_state_enter_time, true)) {
+		    !update_midcourse_geo_tracking(_state_enter_time, true)) {
 			send_home_angle_command();
 		}
 
 		reset_search_scan(_state_enter_time);
 	} else if (new_state == TaskState::Idle) {
+		send_dyt_geo_track_exit();
 		_midcourse_handoff_latched = false;
 		clear_observations();
 		_velocity_sp.zero();
@@ -1154,6 +1181,7 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_candidate_ignore_until = 0;
 		_candidate_ignored_sample_time = 0;
 	} else if (new_state == TaskState::Abort) {
+		send_dyt_geo_track_exit();
 		_next_midcourse_point_time = 0;
 		_last_midcourse_point_time = 0;
 		_midcourse_burst_remaining = 0;
@@ -1198,6 +1226,7 @@ void DytGuidance::deactivate_guidance(uint8_t lost_reason)
 	_last_hint_lock_time = 0;
 	_search_pause_until = 0;
 	_next_scan_time = 0;
+	send_dyt_geo_track_exit();
 	send_dyt_command(dyt_command_s::CMD_STOP_TRACK);
 
 	if (_state != TaskState::Idle) {
@@ -1207,6 +1236,7 @@ void DytGuidance::deactivate_guidance(uint8_t lost_reason)
 
 void DytGuidance::abort_guidance(uint8_t lost_reason)
 {
+	send_dyt_geo_track_exit();
 	send_dyt_command(dyt_command_s::CMD_STOP_TRACK);
 	enter_state(TaskState::Abort, lost_reason);
 }
@@ -1226,7 +1256,7 @@ bool DytGuidance::update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_
 	const hrt_abstime center_delay = static_cast<hrt_abstime>(center_ms) * 1000ULL;
 
 	if ((now - enter_time) < center_delay) {
-		if (home_command_enabled && update_midcourse_gimbal_pointing(now)) {
+		if (home_command_enabled && update_midcourse_geo_tracking(now)) {
 			_last_home_command_time = now;
 
 		} else if (home_command_enabled &&
@@ -1264,7 +1294,7 @@ void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
 		_last_hint_lock_time = 0;
 		_search_pause_until = 0;
 		clear_observations();
-		if (!update_midcourse_gimbal_pointing(now, true)) {
+		if (!update_midcourse_geo_tracking(now, true)) {
 			send_home_angle_command();
 		}
 		reset_search_scan(now);
@@ -1275,7 +1305,7 @@ void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
 		if (target_lock_candidate()) {
 			update_hint_autolock(now);
 		} else {
-			update_midcourse_gimbal_pointing(now);
+			update_midcourse_geo_tracking(now);
 		}
 	}
 }
@@ -1293,6 +1323,82 @@ void DytGuidance::send_dyt_command(uint8_t command, int16_t param_x, int16_t par
 	_last_command = command;
 	_last_command_time = msg.timestamp;
 	++_command_pub_count;
+}
+
+void DytGuidance::send_dyt_ownship_state(hrt_abstime now)
+{
+	if (!global_position_valid() || !PX4_ISFINITE(_vehicle_local_position.z)) {
+		return;
+	}
+
+	if (_last_midcourse_ownship_time != 0 && (now - _last_midcourse_ownship_time) < MIDCOURSE_OWNSHIP_INTERVAL) {
+		return;
+	}
+
+	const Eulerf euler(Quatf(_vehicle_attitude.q));
+	const float ground_speed = (_vehicle_local_position.v_xy_valid && _vehicle_local_position.v_z_valid) ?
+				   sqrtf(_vehicle_local_position.vx * _vehicle_local_position.vx +
+					 _vehicle_local_position.vy * _vehicle_local_position.vy +
+					 _vehicle_local_position.vz * _vehicle_local_position.vz) :
+				   0.f;
+	const bool airspeed_fresh = _airspeed_validated.timestamp != 0 && (now - _airspeed_validated.timestamp) < 1_s;
+	const float airspeed = airspeed_fresh && PX4_ISFINITE(_airspeed_validated.true_airspeed_m_s) ?
+			       _airspeed_validated.true_airspeed_m_s : ground_speed;
+
+	dyt_command_s msg{};
+	msg.timestamp = now;
+	msg.command = dyt_command_s::CMD_SEND_OWNSHIP_STATE;
+	msg.lat = _vehicle_global_position.lat;
+	msg.lon = _vehicle_global_position.lon;
+	msg.alt = _vehicle_global_position.alt;
+	msg.rel_alt = -_vehicle_local_position.z;
+	msg.roll_rad = euler.phi();
+	msg.pitch_rad = euler.theta();
+	msg.yaw_rad = euler.psi();
+	msg.airspeed_m_s = airspeed;
+	msg.groundspeed_m_s = ground_speed;
+	_dyt_command_pub.publish(msg);
+	_last_command = msg.command;
+	_last_command_time = now;
+	_last_midcourse_ownship_time = now;
+	++_command_pub_count;
+}
+
+void DytGuidance::send_dyt_geo_track_target(hrt_abstime now, bool force)
+{
+	if (!midcourse_target_geo_valid()) {
+		return;
+	}
+
+	if (!force && _last_midcourse_geo_target_time != 0 &&
+	    (now - _last_midcourse_geo_target_time) < MIDCOURSE_GEO_TARGET_INTERVAL) {
+		return;
+	}
+
+	dyt_command_s msg{};
+	msg.timestamp = now;
+	msg.command = dyt_command_s::CMD_GEO_TRACK;
+	msg.lat = _midcourse_target_info.lat;
+	msg.lon = _midcourse_target_info.lon;
+	msg.alt = static_cast<float>(_midcourse_target_info.alt);
+	_dyt_command_pub.publish(msg);
+	_last_command = msg.command;
+	_last_command_time = now;
+	_last_midcourse_geo_target_time = now;
+	_midcourse_geotrack_active = true;
+	++_command_pub_count;
+}
+
+void DytGuidance::send_dyt_geo_track_exit()
+{
+	if (!_midcourse_geotrack_active) {
+		return;
+	}
+
+	send_dyt_command(dyt_command_s::CMD_GEO_TRACK_EXIT);
+	_midcourse_geotrack_active = false;
+	_last_midcourse_geo_target_time = 0;
+	_last_midcourse_ownship_time = 0;
 }
 
 void DytGuidance::send_home_angle_command()
@@ -1313,6 +1419,14 @@ int16_t DytGuidance::angle_deg_to_cdeg(float angle_deg) const
 	return static_cast<int16_t>(roundf(limited_deg * 100.f));
 }
 
+bool DytGuidance::global_position_valid() const
+{
+	return _vehicle_global_position.lat_lon_valid && _vehicle_global_position.alt_valid &&
+	       PX4_ISFINITE(static_cast<float>(_vehicle_global_position.lat)) &&
+	       PX4_ISFINITE(static_cast<float>(_vehicle_global_position.lon)) &&
+	       PX4_ISFINITE(_vehicle_global_position.alt);
+}
+
 bool DytGuidance::local_position_global_valid() const
 {
 	return _vehicle_local_position.xy_valid && _vehicle_local_position.z_valid &&
@@ -1322,6 +1436,20 @@ bool DytGuidance::local_position_global_valid() const
 	       PX4_ISFINITE(_vehicle_local_position.ref_lat) &&
 	       PX4_ISFINITE(_vehicle_local_position.ref_lon) &&
 	       PX4_ISFINITE(_vehicle_local_position.ref_alt);
+}
+
+bool DytGuidance::midcourse_target_geo_valid() const
+{
+	if (_last_midcourse_target_time == 0) {
+		return false;
+	}
+
+	const float timeout_s = math::constrain(_param_midcourse_target_timeout.get(), 0.1f, 30.f);
+
+	return (hrt_absolute_time() - _last_midcourse_target_time) <= static_cast<hrt_abstime>(timeout_s * 1_s) &&
+	       PX4_ISFINITE(static_cast<float>(_midcourse_target_info.lat)) &&
+	       PX4_ISFINITE(static_cast<float>(_midcourse_target_info.lon)) &&
+	       PX4_ISFINITE(static_cast<float>(_midcourse_target_info.alt));
 }
 
 bool DytGuidance::midcourse_target_position_local(Vector3f &target_position) const
@@ -1392,8 +1520,27 @@ bool DytGuidance::compute_midcourse_gimbal_angle(float &yaw_deg, float &pitch_de
 	return PX4_ISFINITE(yaw_deg) && PX4_ISFINITE(pitch_deg);
 }
 
+bool DytGuidance::update_midcourse_geo_tracking(hrt_abstime now, bool force)
+{
+	if (target_locked()) {
+		send_dyt_geo_track_exit();
+		return false;
+	}
+
+	if (!midcourse_target_geo_valid()) {
+		send_dyt_geo_track_exit();
+		return false;
+	}
+
+	send_dyt_ownship_state(now);
+	send_dyt_geo_track_target(now, force);
+	return true;
+}
+
 bool DytGuidance::update_midcourse_gimbal_pointing(hrt_abstime now, bool force)
 {
+	// Disabled for DYT midcourse: the payload can perform geographic tracking
+	// internally when it receives EB 91 ownship state and EB 90 3A target packets.
 	if (target_locked()) {
 		return false;
 	}
@@ -1815,7 +1962,7 @@ void DytGuidance::Run()
 				_search_pause_until = now + 1200_ms;
 				_next_scan_time = now + 100_ms;
 			} else {
-				update_midcourse_gimbal_pointing(now);
+				update_midcourse_geo_tracking(now);
 			}
 
 			if ((now - _state_enter_time) > static_cast<hrt_abstime>(_param_wait_ms.get()) * 1000ULL) {
@@ -1884,10 +2031,10 @@ void DytGuidance::Run()
 				if (target_lock_candidate()) {
 					update_hint_autolock(now);
 				} else {
-					update_midcourse_gimbal_pointing(now);
+					update_midcourse_geo_tracking(now);
 				}
 			} else {
-				update_midcourse_gimbal_pointing(now);
+				update_midcourse_geo_tracking(now);
 			}
 		}
 		break;
@@ -1898,6 +2045,8 @@ void DytGuidance::Run()
 	}
 
 	if (_state == TaskState::SearchWaitLock || _state == TaskState::LostHold) {
+		update_midcourse_geo_tracking(now);
+
 		// During midcourse handoff the seeker only drives the gimbal while searching / lost;
 		// aircraft motion stays with the position-sharing follower so there is no hover
 		// break before visual lock.

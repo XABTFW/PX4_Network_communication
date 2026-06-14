@@ -15,9 +15,23 @@ uint8 CMD_LOCK_VIEW = 9
 uint8 CMD_CENTER_GIMBAL = 10
 uint8 CMD_SET_FRAME_ANGLE = 11
 uint8 CMD_SEARCH_RATE = 12
+uint8 CMD_SEND_OWNSHIP_STATE = 13
+uint8 CMD_GEO_TRACK = 14
+uint8 CMD_GEO_TRACK_EXIT = 15
 
 uint8 command
 int16 param_x
 int16 param_y
 uint8 param3
 int8 zoom_rate
+
+# Used by CMD_SEND_OWNSHIP_STATE and CMD_GEO_TRACK.
+float64 lat
+float64 lon
+float32 alt
+float32 rel_alt
+float32 roll_rad
+float32 pitch_rad
+float32 yaw_rad
+float32 airspeed_m_s
+float32 groundspeed_m_s

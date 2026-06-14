@@ -395,7 +395,7 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 	matrix::Vector3f velocity_sp = target_velocity;
 	matrix::Vector2f horizontal_error(to_target(0), to_target(1));
 	const float horizontal_distance = horizontal_error.norm();
-	const float closing_speed = math::constrain(_options.max_speed, 0.5f, 20.f);
+	const float closing_speed = math::constrain(_options.max_speed, 0.5f, 50.f);
 
 	if (horizontal_distance > 0.5f) {
 		const float approach_speed = math::min(closing_speed, horizontal_distance);
@@ -563,7 +563,7 @@ int CooperativeRendezvous::task_spawn(int argc, char *argv[])
 			break;
 
 		case 'v':
-			options.max_speed = math::constrain(strtof(myoptarg, nullptr), 0.5f, 20.f);
+			options.max_speed = math::constrain(strtof(myoptarg, nullptr), 0.5f, 50.f);
 			break;
 
 		case 'T':
@@ -636,7 +636,7 @@ MAV_SYS_ID=2 flies to a configurable offset near aircraft 1.
 	PRINT_MODULE_USAGE_PARAM_FLOAT('x', -5.f, -100.f, 100.f, "Target NED x offset", true);
 	PRINT_MODULE_USAGE_PARAM_FLOAT('y', 0.f, -100.f, 100.f, "Target NED y offset", true);
 	PRINT_MODULE_USAGE_PARAM_FLOAT('z', 0.f, -50.f, 50.f, "Target NED z offset", true);
-	PRINT_MODULE_USAGE_PARAM_FLOAT('v', 3.f, 0.5f, 20.f, "Maximum approach speed", true);
+	PRINT_MODULE_USAGE_PARAM_FLOAT('v', 3.f, 0.5f, 50.f, "Maximum approach speed", true);
 	PRINT_MODULE_USAGE_PARAM_FLOAT('T', 2.f, 0.5f, 10.f, "Target timeout", true);
 	PRINT_MODULE_USAGE_PARAM_FLAG('A', "Auto arm rendezvous aircraft", true);
 	PRINT_MODULE_USAGE_PARAM_FLAG('F', "Relax link/manual/offboard failsafes for simulation", true);

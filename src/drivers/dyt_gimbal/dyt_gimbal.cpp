@@ -11,6 +11,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include <px4_platform_common/getopt.h>
 #include <px4_platform_common/log.h>
@@ -54,6 +55,7 @@ private:
 	static constexpr uint8_t ALT_FRAME_SYNC_2{0xBA};
 	static constexpr size_t ALT_FRAME_LEN{28};
 	static constexpr size_t COMMAND_LEN{16};
+	static constexpr size_t OWNSHIP_STATE_LEN{32};
 	static constexpr unsigned CENTER_SEQUENCE_DELAY_US{80000};
 	
 
@@ -92,6 +94,14 @@ private:
 	int16_t angle_deg_to_cdeg(float angle_deg) const;
 	bool write_command_buffer(const uint8_t *buffer, size_t buffer_len);
 	void send_command_frame(uint8_t control, int16_t param_x, int16_t param_y, uint8_t param3, int8_t zoom_rate);
+	void send_geo_track_frame(uint8_t state, double lat_deg, double lon_deg, float alt_m);
+	void send_ownship_state_frame(const dyt_command_s &cmd);
+	static void put_u16_le(uint8_t *buffer, size_t index, uint16_t value);
+	static void put_u32_le(uint8_t *buffer, size_t index, uint32_t value);
+	static int16_t scaled_s16(float value, float scale, float min_value, float max_value);
+	static uint16_t scaled_u16(float value, float scale, float max_value);
+	static int32_t geo_deg_to_e7(double deg, double min_deg, double max_deg);
+	static uint8_t checksum8(const uint8_t *buffer, size_t checksum_index);
 
 	void update_params_if_needed();
 
@@ -1031,6 +1041,18 @@ void DytGimbal::send_protocol_command(const dyt_command_s &cmd)
 		send_command_frame(0x24, cmd.param_x, cmd.param_y, cmd.param3, cmd.zoom_rate);
 		break;
 
+	case dyt_command_s::CMD_SEND_OWNSHIP_STATE:
+		send_ownship_state_frame(cmd);
+		break;
+
+	case dyt_command_s::CMD_GEO_TRACK:
+		send_geo_track_frame(0x02, cmd.lat, cmd.lon, cmd.alt);
+		break;
+
+	case dyt_command_s::CMD_GEO_TRACK_EXIT:
+		send_geo_track_frame(0x00, 0.0, 0.0, 0.f);
+		break;
+
 	case dyt_command_s::CMD_RETRIGGER:
 		send_command_frame(0x24, 0, 0, 0, 0);
 		send_command_frame(0x0E, 0, 0, 0, 0);
@@ -1142,9 +1164,7 @@ void DytGimbal::send_command_frame(uint8_t control, int16_t param_x, int16_t par
 	buffer[7] = param3;
 	buffer[8] = static_cast<uint8_t>(zoom_rate);
 
-	for (size_t i = 0; i < COMMAND_LEN - 1; ++i) {
-		buffer[COMMAND_LEN - 1] = static_cast<uint8_t>(buffer[COMMAND_LEN - 1] + buffer[i]);
-	}
+	buffer[COMMAND_LEN - 1] = checksum8(buffer, COMMAND_LEN - 1);
 
 	if (!write_command_buffer(buffer, sizeof(buffer))) {
 		++_write_error_count;
@@ -1154,6 +1174,134 @@ void DytGimbal::send_command_frame(uint8_t control, int16_t param_x, int16_t par
 	} else {
 		++_command_tx_count;
 		_last_command_control = control;
+		_last_command_time = hrt_absolute_time();
+	}
+}
+
+void DytGimbal::put_u16_le(uint8_t *buffer, size_t index, uint16_t value)
+{
+	buffer[index] = static_cast<uint8_t>(value & 0xff);
+	buffer[index + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+}
+
+void DytGimbal::put_u32_le(uint8_t *buffer, size_t index, uint32_t value)
+{
+	buffer[index] = static_cast<uint8_t>(value & 0xff);
+	buffer[index + 1] = static_cast<uint8_t>((value >> 8) & 0xff);
+	buffer[index + 2] = static_cast<uint8_t>((value >> 16) & 0xff);
+	buffer[index + 3] = static_cast<uint8_t>((value >> 24) & 0xff);
+}
+
+int16_t DytGimbal::scaled_s16(float value, float scale, float min_value, float max_value)
+{
+	if (!PX4_ISFINITE(value)) {
+		value = 0.f;
+	}
+
+	const float limited = math::constrain(value, min_value, max_value);
+	return static_cast<int16_t>(roundf(limited * scale));
+}
+
+uint16_t DytGimbal::scaled_u16(float value, float scale, float max_value)
+{
+	if (!PX4_ISFINITE(value) || value < 0.f) {
+		value = 0.f;
+	}
+
+	const float limited = math::min(value, max_value);
+	return static_cast<uint16_t>(roundf(limited * scale));
+}
+
+int32_t DytGimbal::geo_deg_to_e7(double deg, double min_deg, double max_deg)
+{
+	if (!PX4_ISFINITE(static_cast<float>(deg))) {
+		deg = 0.0;
+	}
+
+	const double limited = math::constrain(deg, min_deg, max_deg);
+	return static_cast<int32_t>(round(limited * 1e7));
+}
+
+uint8_t DytGimbal::checksum8(const uint8_t *buffer, size_t checksum_index)
+{
+	uint8_t checksum = 0;
+
+	for (size_t i = 0; i < checksum_index; ++i) {
+		checksum = static_cast<uint8_t>(checksum + buffer[i]);
+	}
+
+	return checksum;
+}
+
+void DytGimbal::send_geo_track_frame(uint8_t state, double lat_deg, double lon_deg, float alt_m)
+{
+	if (_uart_fd < 0) {
+		return;
+	}
+
+	uint8_t buffer[COMMAND_LEN]{};
+	buffer[0] = 0xEB;
+	buffer[1] = 0x90;
+	buffer[2] = 0x3A;
+	buffer[3] = state;
+	put_u32_le(buffer, 4, static_cast<uint32_t>(geo_deg_to_e7(lat_deg, -90.0, 90.0)));
+	put_u32_le(buffer, 8, static_cast<uint32_t>(geo_deg_to_e7(lon_deg, -180.0, 180.0)));
+	put_u16_le(buffer, 12, static_cast<uint16_t>(scaled_s16(alt_m, 5.f, -6553.6f, 6553.4f)));
+	buffer[14] = 0;
+	buffer[15] = checksum8(buffer, 15);
+
+	if (!write_command_buffer(buffer, sizeof(buffer))) {
+		++_write_error_count;
+		PX4_WARN("DYT geo track tx failed result=%d errno=%d", _last_write_result, _last_write_errno);
+
+	} else {
+		++_command_tx_count;
+		_last_command_control = 0x3A;
+		_last_command_time = hrt_absolute_time();
+	}
+}
+
+void DytGimbal::send_ownship_state_frame(const dyt_command_s &cmd)
+{
+	if (_uart_fd < 0) {
+		return;
+	}
+
+	uint8_t buffer[OWNSHIP_STATE_LEN]{};
+	buffer[0] = 0xEB;
+	buffer[1] = 0x91;
+	put_u16_le(buffer, 2, static_cast<uint16_t>(scaled_s16(math::degrees(cmd.roll_rad), 100.f, -180.f, 180.f)));
+	put_u16_le(buffer, 4, static_cast<uint16_t>(scaled_s16(math::degrees(cmd.pitch_rad), 100.f, -180.f, 180.f)));
+	put_u16_le(buffer, 6, static_cast<uint16_t>(scaled_s16(math::degrees(cmd.yaw_rad), 100.f, -180.f, 180.f)));
+	put_u32_le(buffer, 8, static_cast<uint32_t>(geo_deg_to_e7(cmd.lat, -90.0, 90.0)));
+	put_u32_le(buffer, 12, static_cast<uint32_t>(geo_deg_to_e7(cmd.lon, -180.0, 180.0)));
+	put_u16_le(buffer, 16, static_cast<uint16_t>(scaled_s16(cmd.alt, 5.f, -6553.6f, 6553.4f)));
+	put_u16_le(buffer, 18, static_cast<uint16_t>(scaled_s16(cmd.rel_alt, 5.f, -6553.6f, 6553.4f)));
+
+	time_t unix_time = time(nullptr);
+	struct tm utc_time {};
+
+	if (unix_time > 946684800 && gmtime_r(&unix_time, &utc_time) != nullptr) {
+		buffer[20] = static_cast<uint8_t>(math::constrain(utc_time.tm_year - 100, 0, 255));
+		buffer[21] = static_cast<uint8_t>(utc_time.tm_mon + 1);
+		buffer[22] = static_cast<uint8_t>(utc_time.tm_mday);
+		buffer[23] = static_cast<uint8_t>(utc_time.tm_hour);
+		buffer[24] = static_cast<uint8_t>(utc_time.tm_min);
+		buffer[25] = static_cast<uint8_t>(utc_time.tm_sec);
+	}
+
+	buffer[26] = static_cast<uint8_t>((hrt_absolute_time() / 10000ULL) % 100ULL);
+	put_u16_le(buffer, 27, scaled_u16(cmd.airspeed_m_s, 2.f, 32767.f));
+	put_u16_le(buffer, 29, scaled_u16(cmd.groundspeed_m_s, 2.f, 32767.f));
+	buffer[31] = checksum8(buffer, 31);
+
+	if (!write_command_buffer(buffer, sizeof(buffer))) {
+		++_write_error_count;
+		PX4_WARN("DYT ownship state tx failed result=%d errno=%d", _last_write_result, _last_write_errno);
+
+	} else {
+		++_command_tx_count;
+		_last_command_control = 0x91;
 		_last_command_time = hrt_absolute_time();
 	}
 }
