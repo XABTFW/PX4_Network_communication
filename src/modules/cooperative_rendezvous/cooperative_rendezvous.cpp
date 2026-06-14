@@ -395,10 +395,15 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 	matrix::Vector3f velocity_sp = target_velocity;
 	matrix::Vector2f horizontal_error(to_target(0), to_target(1));
 	const float horizontal_distance = horizontal_error.norm();
-	const float closing_speed = math::constrain(_options.max_speed, 0.5f, 50.f);
+	const float configured_speed = _param_app_speed.get();
+	const float closing_speed = PX4_ISFINITE(configured_speed) && configured_speed > 0.f ?
+				     math::constrain(configured_speed, 0.5f, 80.f) :
+				     math::constrain(_options.max_speed, 0.5f, 80.f);
+	const float slow_radius = math::max(_param_slow_radius.get(), 0.5f);
 
 	if (horizontal_distance > 0.5f) {
-		const float approach_speed = math::min(closing_speed, horizontal_distance);
+		const float speed_scale = math::constrain(horizontal_distance / slow_radius, 0.f, 1.f);
+		const float approach_speed = closing_speed * speed_scale;
 		const matrix::Vector2f approach_xy = horizontal_error / horizontal_distance * approach_speed;
 		velocity_sp(0) += approach_xy(0);
 		velocity_sp(1) += approach_xy(1);
@@ -421,8 +426,9 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 	const hrt_abstime now = hrt_absolute_time();
 
 	if (now - _last_status_log > 2_s) {
-		PX4_INFO("cooperative rendezvous: target=%" PRIu32 " distance=%.1fm setpoint=(%.1f %.1f %.1f)",
+		PX4_INFO("cooperative rendezvous: target=%" PRIu32 " distance=%.1fm app_spd=%.1fm/s setpoint=(%.1f %.1f %.1f)",
 			 _options.target_id, (double)distance,
+			 (double)closing_speed,
 			 (double)target_position(0), (double)target_position(1), (double)target_position(2));
 		_last_status_log = now;
 	}
@@ -487,12 +493,14 @@ int CooperativeRendezvous::print_status()
 		break;
 	}
 
-	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) dist=%.1f alt_diff=%.1f",
+	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) dist=%.1f app_spd=%.1f slow=%.1f alt_diff=%.1f",
 		 _vehicle_id, role, _options.target_id,
 		 (double)_options.target_offset(0),
 		 (double)_options.target_offset(1),
 		 (double)_options.target_offset(2),
 		 (double)_param_dist.get(),
+		 (double)_param_app_speed.get(),
+		 (double)_param_slow_radius.get(),
 		 (double)_param_alt_diff.get());
 	PX4_INFO("activation aux=%d enabled=%d dyt_active=%d",
 		 static_cast<int>(_param_act_aux.get()), rendezvous_switch_enabled(), dyt_guidance_active());

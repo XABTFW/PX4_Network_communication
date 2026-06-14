@@ -109,6 +109,8 @@ private:
 		(ParamInt<px4::params::CRDZ_ACT_AUX>) _param_act_aux,
 		(ParamInt<px4::params::CRDZ_ACT_BTN>) _param_act_btn,
 		(ParamFloat<px4::params::CRDZ_DIST>) _param_dist,
+		(ParamFloat<px4::params::CRDZ_APP_SPD>) _param_app_speed,
+		(ParamFloat<px4::params::CRDZ_SLOW_RAD>) _param_slow_radius,
 		(ParamFloat<px4::params::CRDZ_ALT_DIFF>) _param_alt_diff
 	)
 };

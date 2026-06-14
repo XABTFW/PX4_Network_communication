@@ -1134,6 +1134,20 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
 		_candidate_ignored_sample_time = 0;
+		_last_track_setpoint_time = _state_enter_time;
+
+		if (_vehicle_local_position.v_xy_valid) {
+			_velocity_sp(0) = PX4_ISFINITE(_vehicle_local_position.vx) ? _vehicle_local_position.vx : 0.f;
+			_velocity_sp(1) = PX4_ISFINITE(_vehicle_local_position.vy) ? _vehicle_local_position.vy : 0.f;
+
+		} else {
+			_velocity_sp(0) = 0.f;
+			_velocity_sp(1) = 0.f;
+		}
+
+		_velocity_sp(2) = _vehicle_local_position.v_z_valid && PX4_ISFINITE(_vehicle_local_position.vz) ?
+				  _vehicle_local_position.vz : 0.f;
+		_acceleration_sp.zero();
 	} else if (new_state == TaskState::LostHold) {
 		_relock_streak = 0;
 		_last_home_command_time = 0;

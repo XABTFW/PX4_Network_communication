@@ -120,7 +120,7 @@ PARAM_DEFINE_INT32(DYTG_AUTO_N, 5);
  * @max 20
  * @group DYT Guidance
  */
-PARAM_DEFINE_INT32(DYTG_LOCK_N, 3);
+PARAM_DEFINE_INT32(DYTG_LOCK_N, 4);
 
 /**
  * Consecutive lock frames to recover from lost hold

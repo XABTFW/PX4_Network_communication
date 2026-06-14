@@ -45,6 +45,38 @@ PARAM_DEFINE_INT32(CRDZ_ACT_BTN, -1);
 PARAM_DEFINE_FLOAT(CRDZ_DIST, 0.f);
 
 /**
+ * Approach speed toward target position
+ *
+ * Horizontal closing speed added while the rendezvous aircraft has not reached
+ * the desired target-relative position. Keep this above the target aircraft
+ * speed when the follower needs to catch up.
+ *
+ * Set to 0 to use the startup -v argument.
+ *
+ * @unit m/s
+ * @min 0
+ * @max 80
+ * @decimal 1
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_APP_SPD, 40.f);
+
+/**
+ * Slowdown radius near target position
+ *
+ * The approach speed stays at CRDZ_APP_SPD while horizontal position error is
+ * larger than this radius, then scales down linearly to avoid overshoot near
+ * the desired target-relative position.
+ *
+ * @unit m
+ * @min 0.5
+ * @max 100
+ * @decimal 1
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_SLOW_RAD, 5.f);
+
+/**
  * Altitude difference from target
  *
  * Desired altitude difference for the rendezvous aircraft relative to the
