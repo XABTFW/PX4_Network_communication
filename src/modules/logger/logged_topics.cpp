@@ -66,6 +66,7 @@ void LoggedTopics::add_default_topics()
 	add_topic("dyt_guidance_status");
 	add_topic("dyt_status_reply");
 	add_topic("dyt_target");
+	add_topic("follower_info");
 	// add_optional_topic("esc_status", 250);
 	add_topic("esc_status");
 	add_topic("failure_detector_status", 100);
