@@ -1,5 +1,9 @@
 /**
- * Activation AUX channel
+ * Terminal guidance activation AUX channel
+ *
+ * Enables DYT visual guidance to take over aircraft motion after seeker lock.
+ * Midcourse geographic pointing follows the Cooperative Rendezvous activation
+ * switch (CRDZ_ACT_AUX / CRDZ_ACT_BTN) when DYTG_COOP_EN is enabled.
  *
  * @value 0 Disabled
  * @value 1 AUX1
@@ -13,10 +17,13 @@
 PARAM_DEFINE_INT32(DYTG_ACT_AUX, 1);
 
 /**
- * Activation joystick button
+ * Terminal guidance activation joystick button
  *
- * Enables guidance using the MANUAL_CONTROL buttons bitmask. Button numbers
- * match the zero-based numbering shown by QGroundControl.
+ * Enables DYT visual guidance to take over aircraft motion after seeker lock
+ * using the MANUAL_CONTROL buttons bitmask. Button numbers match the zero-based
+ * numbering shown by QGroundControl. Midcourse geographic pointing follows the
+ * Cooperative Rendezvous activation button (CRDZ_ACT_BTN) when DYTG_COOP_EN is
+ * enabled.
  *
  * @value -1 Disabled
  * @min -1
@@ -46,7 +53,10 @@ PARAM_DEFINE_INT32(DYTG_INT_AUX, 2);
  * offboard setpoints) while the camera is locked and tracking. While searching
  * or after losing the lock, the seeker controls the gimbal only and leaves the
  * aircraft motion to the cooperative_rendezvous position-sharing follower, so
- * the two controllers never publish setpoints at the same time.
+ * the two controllers never publish setpoints at the same time. The
+ * Cooperative Rendezvous activation switch also enables midcourse geographic
+ * pointing, so the payload can look at the shared target before terminal
+ * guidance is authorized.
  *
  * Disable for standalone seeker operation (the seeker then holds position while
  * searching, as before).
@@ -55,6 +65,20 @@ PARAM_DEFINE_INT32(DYTG_INT_AUX, 2);
  * @group DYT Guidance
  */
 PARAM_DEFINE_INT32(DYTG_COOP_EN, 0);
+
+/**
+ * Midcourse geographic tracking enable
+ *
+ * When enabled, midcourse pointing uses the DYT payload geographic tracking
+ * protocol with ownship state and target latitude/longitude/altitude packets.
+ * Disable to compute a frame-angle command in PX4 from the shared target
+ * position instead. Disabling avoids sending near-vertical ownship Euler
+ * attitudes for upward-looking payload installations.
+ *
+ * @boolean
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_INT32(DYTG_GEO_EN, 1);
 
 /**
  * Midcourse target MAV_SYS_ID
@@ -81,6 +105,34 @@ PARAM_DEFINE_INT32(DYTG_TGT_ID, 1);
  * @group DYT Guidance
  */
 PARAM_DEFINE_FLOAT(DYTG_TGT_TO, 2.0f);
+
+/**
+ * Midcourse target altitude offset
+ *
+ * Offset added to follower_info.alt before sending the midcourse geographic
+ * target to the DYT seeker. Keep at 0 for normal flight. Use this to compensate
+ * known inter-aircraft absolute altitude bias during ground tests.
+ *
+ * @unit m
+ * @decimal 1
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_TGT_ALTOFF, 0.0f);
+
+/**
+ * Midcourse gimbal prediction time
+ *
+ * Prediction time used when PX4 computes midcourse gimbal frame-angle commands
+ * from ownship and target positions. This compensates seeker/gimbal response
+ * delay by pointing at the predicted line of sight. Set to 0 to disable.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 0.5
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_MNT_PRED, 0.0f);
 
 /**
  * Manual takeover stick threshold
@@ -268,6 +320,21 @@ PARAM_DEFINE_FLOAT(DYTG_MAXAGE, 0.25f);
  * @group DYT Guidance
  */
 PARAM_DEFINE_FLOAT(DYTG_MAXJIT, 0.12f);
+
+/**
+ * Terminal handoff blend time
+ *
+ * Time used to blend from the previous midcourse velocity setpoint to the
+ * visual guidance velocity setpoint after seeker lock. Set to 0 to disable the
+ * blend.
+ *
+ * @unit s
+ * @min 0.0
+ * @max 3.0
+ * @decimal 2
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_HOFF_T, 0.80f);
 
 /**
  * Maximum delay allowed for intercept
@@ -714,3 +781,58 @@ PARAM_DEFINE_FLOAT(DYTG_POFF, 0.f);
  * @group DYT Guidance
  */
 PARAM_DEFINE_FLOAT(DYTG_YOFF, 0.f);
+
+/**
+ * Midcourse mount rotation enable
+ *
+ * Enables a full Euler rotation from gimbal installation frame to aircraft body
+ * frame before computing midcourse frame-angle commands from target position.
+ * Keep disabled to use the legacy aircraft-body angle calculation.
+ *
+ * @boolean
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_INT32(DYTG_MNT_EN, 0);
+
+/**
+ * Midcourse mount roll
+ *
+ * Roll angle of the gimbal installation frame relative to the aircraft body
+ * frame. Applied when DYTG_MNT_EN is set.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_MNT_R, 0.f);
+
+/**
+ * Midcourse mount pitch
+ *
+ * Pitch angle of the gimbal installation frame relative to the aircraft body
+ * frame. For an installation where gimbal +X points along aircraft -Z, start
+ * with +90 or -90 degrees and verify the direction on the ground.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_MNT_P, 0.f);
+
+/**
+ * Midcourse mount yaw
+ *
+ * Yaw angle of the gimbal installation frame relative to the aircraft body
+ * frame. Applied when DYTG_MNT_EN is set.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Guidance
+ */
+PARAM_DEFINE_FLOAT(DYTG_MNT_Y, 0.f);

@@ -27,8 +27,11 @@
 #include <uORB/topics/parameter_update.h>
 
 #include <lib/mathlib/mathlib.h>
+#include <matrix/matrix/math.hpp>
 
 using namespace time_literals;
+using matrix::Dcmf;
+using matrix::Eulerf;
 
 class DytGimbal : public ModuleBase<DytGimbal>, public ModuleParams, public px4::ScheduledWorkItem
 {
@@ -96,6 +99,9 @@ private:
 	void send_command_frame(uint8_t control, int16_t param_x, int16_t param_y, uint8_t param3, int8_t zoom_rate);
 	void send_geo_track_frame(uint8_t state, double lat_deg, double lon_deg, float alt_m);
 	void send_ownship_state_frame(const dyt_command_s &cmd);
+	void corrected_geo_attitude_deg(const dyt_command_s &cmd, float &roll_deg, float &pitch_deg, float &yaw_deg) const;
+	float corrected_geo_axis_deg(float angle_rad, int sign_param, float offset_deg) const;
+	float finite_param_deg(float value) const;
 	static void put_u16_le(uint8_t *buffer, size_t index, uint16_t value);
 	static void put_u32_le(uint8_t *buffer, size_t index, uint32_t value);
 	static int16_t scaled_s16(float value, float scale, float min_value, float max_value);
@@ -174,7 +180,17 @@ private:
 		(ParamInt<px4::params::DYT_HOME_DUR>) _param_dyt_home_duration_ms,
 		(ParamInt<px4::params::DYT_HOME_INT>) _param_dyt_home_interval_ms,
 		(ParamFloat<px4::params::DYT_HOME_YAW>) _param_dyt_home_yaw_deg,
-		(ParamFloat<px4::params::DYT_HOME_PIT>) _param_dyt_home_pitch_deg
+		(ParamFloat<px4::params::DYT_HOME_PIT>) _param_dyt_home_pitch_deg,
+		(ParamInt<px4::params::DYT_GEO_RSIGN>) _param_dyt_geo_roll_sign,
+		(ParamInt<px4::params::DYT_GEO_PSIGN>) _param_dyt_geo_pitch_sign,
+		(ParamInt<px4::params::DYT_GEO_YSIGN>) _param_dyt_geo_yaw_sign,
+		(ParamFloat<px4::params::DYT_GEO_ROFF>) _param_dyt_geo_roll_offset_deg,
+		(ParamFloat<px4::params::DYT_GEO_POFF>) _param_dyt_geo_pitch_offset_deg,
+		(ParamFloat<px4::params::DYT_GEO_YOFF>) _param_dyt_geo_yaw_offset_deg,
+		(ParamInt<px4::params::DYT_GEO_MNT_EN>) _param_dyt_geo_mount_enable,
+		(ParamFloat<px4::params::DYT_GEO_MNT_R>) _param_dyt_geo_mount_roll_deg,
+		(ParamFloat<px4::params::DYT_GEO_MNT_P>) _param_dyt_geo_mount_pitch_deg,
+		(ParamFloat<px4::params::DYT_GEO_MNT_Y>) _param_dyt_geo_mount_yaw_deg
 	);
 };
 
@@ -247,6 +263,18 @@ void DytGimbal::show_status()
 		 static_cast<double>(_param_dyt_home_pitch_deg.get()),
 		 static_cast<double>(_startup_home_next_time > 0 && hrt_absolute_time() < _startup_home_next_time ?
 			(_startup_home_next_time - hrt_absolute_time()) * 1e-6 : 0.0));
+	PX4_INFO("geo attitude correction: sign=(%ld %ld %ld) offset=(%.1f %.1f %.1f) deg",
+		 static_cast<long>(_param_dyt_geo_roll_sign.get()),
+		 static_cast<long>(_param_dyt_geo_pitch_sign.get()),
+		 static_cast<long>(_param_dyt_geo_yaw_sign.get()),
+		 static_cast<double>(_param_dyt_geo_roll_offset_deg.get()),
+		 static_cast<double>(_param_dyt_geo_pitch_offset_deg.get()),
+		 static_cast<double>(_param_dyt_geo_yaw_offset_deg.get()));
+	PX4_INFO("geo mount rotation: en=%ld rpy=(%.1f %.1f %.1f) deg",
+		 static_cast<long>(_param_dyt_geo_mount_enable.get()),
+		 static_cast<double>(_param_dyt_geo_mount_roll_deg.get()),
+		 static_cast<double>(_param_dyt_geo_mount_pitch_deg.get()),
+		 static_cast<double>(_param_dyt_geo_mount_yaw_deg.get()));
 	PX4_INFO("debug log period: %ld ms", static_cast<long>(_param_dyt_log_ms.get()));
 	PX4_INFO("raw frame log: %ld", static_cast<long>(_param_dyt_rawlog.get()));
 	PX4_INFO("last rx: %.3f s", static_cast<double>(_last_rx_time > 0 ?
@@ -1267,12 +1295,17 @@ void DytGimbal::send_ownship_state_frame(const dyt_command_s &cmd)
 		return;
 	}
 
+	float roll_deg = 0.f;
+	float pitch_deg = 0.f;
+	float yaw_deg = 0.f;
+	corrected_geo_attitude_deg(cmd, roll_deg, pitch_deg, yaw_deg);
+
 	uint8_t buffer[OWNSHIP_STATE_LEN]{};
 	buffer[0] = 0xEB;
 	buffer[1] = 0x91;
-	put_u16_le(buffer, 2, static_cast<uint16_t>(scaled_s16(math::degrees(cmd.roll_rad), 100.f, -180.f, 180.f)));
-	put_u16_le(buffer, 4, static_cast<uint16_t>(scaled_s16(math::degrees(cmd.pitch_rad), 100.f, -180.f, 180.f)));
-	put_u16_le(buffer, 6, static_cast<uint16_t>(scaled_s16(math::degrees(cmd.yaw_rad), 100.f, -180.f, 180.f)));
+	put_u16_le(buffer, 2, static_cast<uint16_t>(scaled_s16(roll_deg, 100.f, -180.f, 180.f)));
+	put_u16_le(buffer, 4, static_cast<uint16_t>(scaled_s16(pitch_deg, 100.f, -180.f, 180.f)));
+	put_u16_le(buffer, 6, static_cast<uint16_t>(scaled_s16(yaw_deg, 100.f, -180.f, 180.f)));
 	put_u32_le(buffer, 8, static_cast<uint32_t>(geo_deg_to_e7(cmd.lat, -90.0, 90.0)));
 	put_u32_le(buffer, 12, static_cast<uint32_t>(geo_deg_to_e7(cmd.lon, -180.0, 180.0)));
 	put_u16_le(buffer, 16, static_cast<uint16_t>(scaled_s16(cmd.alt, 5.f, -6553.6f, 6553.4f)));
@@ -1304,6 +1337,45 @@ void DytGimbal::send_ownship_state_frame(const dyt_command_s &cmd)
 		_last_command_control = 0x91;
 		_last_command_time = hrt_absolute_time();
 	}
+}
+
+void DytGimbal::corrected_geo_attitude_deg(const dyt_command_s &cmd, float &roll_deg, float &pitch_deg,
+		float &yaw_deg) const
+{
+	float roll_rad = cmd.roll_rad;
+	float pitch_rad = cmd.pitch_rad;
+	float yaw_rad = cmd.yaw_rad;
+
+	if (_param_dyt_geo_mount_enable.get() > 0) {
+		const Dcmf body_to_ned(Eulerf(roll_rad, pitch_rad, yaw_rad));
+		const Dcmf mount_to_body(Eulerf(math::radians(finite_param_deg(_param_dyt_geo_mount_roll_deg.get())),
+						math::radians(finite_param_deg(_param_dyt_geo_mount_pitch_deg.get())),
+						math::radians(finite_param_deg(_param_dyt_geo_mount_yaw_deg.get()))));
+		const Eulerf mount_euler(body_to_ned * mount_to_body);
+		roll_rad = mount_euler.phi();
+		pitch_rad = mount_euler.theta();
+		yaw_rad = mount_euler.psi();
+	}
+
+	roll_deg = corrected_geo_axis_deg(roll_rad, _param_dyt_geo_roll_sign.get(),
+					  _param_dyt_geo_roll_offset_deg.get());
+	pitch_deg = corrected_geo_axis_deg(pitch_rad, _param_dyt_geo_pitch_sign.get(),
+					   _param_dyt_geo_pitch_offset_deg.get());
+	yaw_deg = corrected_geo_axis_deg(yaw_rad, _param_dyt_geo_yaw_sign.get(),
+					 _param_dyt_geo_yaw_offset_deg.get());
+}
+
+float DytGimbal::corrected_geo_axis_deg(float angle_rad, int sign_param, float offset_deg) const
+{
+	const float sign = sign_param < 0 ? -1.f : 1.f;
+	const float finite_offset = PX4_ISFINITE(offset_deg) ? offset_deg : 0.f;
+
+	return math::constrain(math::degrees(angle_rad) * sign + finite_offset, -180.f, 180.f);
+}
+
+float DytGimbal::finite_param_deg(float value) const
+{
+	return PX4_ISFINITE(value) ? value : 0.f;
 }
 
 int DytGimbal::task_spawn(int argc, char *argv[])

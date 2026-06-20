@@ -30,6 +30,7 @@
 #include <uORB/topics/vehicle_command.h>
 #include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/vehicle_local_position.h>
+#include <uORB/topics/vehicle_local_position_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
 
 #include <lib/geo/geo.h>
@@ -70,11 +71,12 @@ private:
 	static constexpr float MIDCOURSE_RESEND_ANGLE_DELTA_DEG{0.5f};
 	static constexpr int MIDCOURSE_BURST_COUNT{3};
 	static constexpr hrt_abstime MIDCOURSE_BURST_INTERVAL{40_ms};
-	static constexpr hrt_abstime MIDCOURSE_HOLD_INTERVAL{100_ms};
+	static constexpr hrt_abstime MIDCOURSE_HOLD_INTERVAL{50_ms};
 	static constexpr hrt_abstime MIDCOURSE_OWNSHIP_INTERVAL{40_ms};
 	static constexpr hrt_abstime MIDCOURSE_GEO_TARGET_INTERVAL{100_ms};
 	static constexpr int SEARCH_CENTER_PASSES{2};
 	static constexpr hrt_abstime MANUAL_TAKEOVER_GRACE{500_ms};
+	static constexpr hrt_abstime TRACK_HANDOFF_SETPOINT_MAX_AGE{300_ms};
 
 	struct ScanArea {
 		float yaw_min_deg{0.f};
@@ -122,6 +124,7 @@ private:
 	bool button_active(int button) const;
 	bool payload_switch_active() const;
 	bool activation_requested() const;
+	bool midcourse_pointing_requested() const;
 	bool preconditions_ok() const;
 	bool manual_takeover_detected() const;
 
@@ -137,6 +140,8 @@ private:
 	void publish_offboard_mode(bool position_mode);
 	void request_offboard_mode();
 	void publish_status();
+	void capture_track_handoff_velocity();
+	float track_handoff_blend(hrt_abstime now) const;
 
 	void enter_state(TaskState new_state, uint8_t lost_reason = dyt_guidance_status_s::LOST_REASON_NONE);
 	void activate_guidance(hrt_abstime now);
@@ -168,8 +173,13 @@ private:
 	bool global_position_valid() const;
 	bool local_position_global_valid() const;
 	bool midcourse_target_geo_valid() const;
+	float midcourse_target_command_alt() const;
 	bool midcourse_target_position_local(Vector3f &target_position) const;
 	bool compute_midcourse_gimbal_angle(float &yaw_deg, float &pitch_deg) const;
+	Vector3f rotate_body_los_to_mount(const Vector3f &los_body) const;
+	Vector3f rotate_mount_los_to_body(const Vector3f &los_mount) const;
+	float finite_param_deg(float value) const;
+	bool update_midcourse_pointing(hrt_abstime now, bool force = false);
 	bool update_midcourse_geo_tracking(hrt_abstime now, bool force = false);
 	bool update_midcourse_gimbal_pointing(hrt_abstime now, bool force = false);
 	void retry_autolock(hrt_abstime now);
@@ -223,10 +233,12 @@ private:
 	hrt_abstime _last_midcourse_point_time{0};
 	hrt_abstime _last_midcourse_ownship_time{0};
 	hrt_abstime _last_midcourse_geo_target_time{0};
+	hrt_abstime _track_handoff_time{0};
 	float _midcourse_yaw_deg{NAN};
 	float _midcourse_pitch_deg{NAN};
 	int _midcourse_burst_remaining{0};
 	bool _midcourse_geotrack_active{false};
+	bool _track_handoff_velocity_valid{false};
 
 	LosObservation _observations[OBS_BUFFER_LEN]{};
 	int _observation_count{0};
@@ -241,6 +253,7 @@ private:
 	vehicle_attitude_s _vehicle_attitude{};
 	vehicle_global_position_s _vehicle_global_position{};
 	vehicle_local_position_s _vehicle_local_position{};
+	vehicle_local_position_setpoint_s _vehicle_local_position_setpoint{};
 	vehicle_status_s _vehicle_status{};
 	vehicle_angular_velocity_s _vehicle_angular_velocity{};
 	airspeed_validated_s _airspeed_validated{};
@@ -249,6 +262,7 @@ private:
 
 	Vector3f _hold_position{};
 	float _hold_yaw{0.f};
+	Vector3f _track_handoff_velocity{};
 
 	Vector3f _los_ned{};
 	Vector3f _los_body_latest{};
@@ -268,6 +282,7 @@ private:
 	uORB::Subscription _vehicle_attitude_sub{ORB_ID(vehicle_attitude)};
 	uORB::Subscription _vehicle_global_position_sub{ORB_ID(vehicle_global_position)};
 	uORB::Subscription _vehicle_local_position_sub{ORB_ID(vehicle_local_position)};
+	uORB::Subscription _vehicle_local_position_setpoint_sub{ORB_ID(vehicle_local_position_setpoint)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _vehicle_angular_velocity_sub{ORB_ID(vehicle_angular_velocity)};
 	uORB::Subscription _airspeed_validated_sub{ORB_ID(airspeed_validated)};
@@ -286,8 +301,13 @@ private:
 		(ParamInt<px4::params::DYTG_ACT_BTN>) _param_act_btn,
 		(ParamInt<px4::params::DYTG_INT_AUX>) _param_int_aux,
 		(ParamInt<px4::params::DYTG_COOP_EN>) _param_coop_enable,
+		(ParamInt<px4::params::DYTG_GEO_EN>) _param_midcourse_geo_enable,
+		(ParamInt<px4::params::CRDZ_ACT_AUX>) _param_midcourse_act_aux,
+		(ParamInt<px4::params::CRDZ_ACT_BTN>) _param_midcourse_act_btn,
 		(ParamInt<px4::params::DYTG_TGT_ID>) _param_midcourse_target_id,
 		(ParamFloat<px4::params::DYTG_TGT_TO>) _param_midcourse_target_timeout,
+		(ParamFloat<px4::params::DYTG_TGT_ALTOFF>) _param_midcourse_target_alt_offset,
+		(ParamFloat<px4::params::DYTG_MNT_PRED>) _param_midcourse_gimbal_prediction,
 		(ParamFloat<px4::params::DYTG_STK_TK>) _param_stick_takeover,
 		(ParamInt<px4::params::DYTG_AUTO_EN>) _param_auto_enable,
 		(ParamInt<px4::params::DYTG_AUTO_N>) _param_auto_frames,
@@ -306,6 +326,7 @@ private:
 		(ParamFloat<px4::params::DYTG_DLY_MS>) _param_delay_ms,
 		(ParamFloat<px4::params::DYTG_MAXAGE>) _param_max_age,
 		(ParamFloat<px4::params::DYTG_MAXJIT>) _param_max_gap,
+		(ParamFloat<px4::params::DYTG_HOFF_T>) _param_handoff_blend_time,
 		(ParamFloat<px4::params::DYTG_INTDLY>) _param_intercept_delay,
 		(ParamFloat<px4::params::DYTG_N_FOL>) _param_n_follow,
 		(ParamFloat<px4::params::DYTG_V_FOL>) _param_v_follow,
@@ -347,6 +368,10 @@ private:
 		(ParamFloat<px4::params::DYTG_ROFF>) _param_roll_off_deg,
 		(ParamFloat<px4::params::DYTG_POFF>) _param_pitch_off_deg,
 		(ParamFloat<px4::params::DYTG_YOFF>) _param_yaw_off_deg,
+		(ParamInt<px4::params::DYTG_MNT_EN>) _param_mount_enable,
+		(ParamFloat<px4::params::DYTG_MNT_R>) _param_mount_roll_deg,
+		(ParamFloat<px4::params::DYTG_MNT_P>) _param_mount_pitch_deg,
+		(ParamFloat<px4::params::DYTG_MNT_Y>) _param_mount_yaw_deg,
 		(ParamFloat<px4::params::DYT_HOME_YAW>) _param_home_yaw_deg,
 		(ParamFloat<px4::params::DYT_HOME_PIT>) _param_home_pitch_deg
 	);
@@ -374,8 +399,9 @@ int DytGuidance::print_status()
 void DytGuidance::show_status()
 {
 	PX4_INFO("state: %u", static_cast<unsigned>(_state));
-	PX4_INFO("handoff: coop_en=%ld active=%d controlling_vehicle=%d",
-		 static_cast<long>(_param_coop_enable.get()), midcourse_handoff_active(), vehicle_control_active());
+	PX4_INFO("handoff: coop_en=%ld geo_en=%ld active=%d controlling_vehicle=%d",
+		 static_cast<long>(_param_coop_enable.get()),
+		 static_cast<long>(_param_midcourse_geo_enable.get()), midcourse_handoff_active(), vehicle_control_active());
 	PX4_INFO("midcourse target: id=%lu age=%.3f yaw=%.1f pitch=%.1f burst=%d",
 		 static_cast<unsigned long>(_midcourse_target_info.mavid),
 		 static_cast<double>(_last_midcourse_target_time > 0 ?
@@ -383,6 +409,38 @@ void DytGuidance::show_status()
 		 static_cast<double>(_midcourse_yaw_deg),
 		 static_cast<double>(_midcourse_pitch_deg),
 		 _midcourse_burst_remaining);
+	Vector3f midcourse_target_position{};
+
+	if (midcourse_target_position_local(midcourse_target_position)) {
+		const Vector3f own_position(_vehicle_local_position.x, _vehicle_local_position.y, _vehicle_local_position.z);
+		const Vector3f los_ned = midcourse_target_position - own_position;
+		const float horizontal_distance = sqrtf(los_ned(0) * los_ned(0) + los_ned(1) * los_ned(1));
+		const float target_up = -los_ned(2);
+		const float elevation_deg = math::degrees(atan2f(target_up, math::max(horizontal_distance, 0.001f)));
+		const float bearing_deg = math::degrees(atan2f(los_ned(1), los_ned(0)));
+		float body_yaw_deg = NAN;
+		float body_pitch_deg = NAN;
+		(void)compute_midcourse_gimbal_angle(body_yaw_deg, body_pitch_deg);
+		PX4_INFO("midcourse geometry: horiz=%.1f m target_up=%.1f m elev=%.1f deg bearing=%.1f deg",
+			 static_cast<double>(horizontal_distance),
+			 static_cast<double>(target_up),
+			 static_cast<double>(elevation_deg),
+			 static_cast<double>(bearing_deg));
+		PX4_INFO("midcourse body angle: yaw=%.1f deg pitch=%.1f deg",
+			 static_cast<double>(body_yaw_deg),
+			 static_cast<double>(body_pitch_deg));
+	}
+
+	if (global_position_valid() && midcourse_target_geo_valid()) {
+		const float target_command_alt = midcourse_target_command_alt();
+		PX4_INFO("midcourse altitude: own_msl=%.1f m target_raw=%.1f m target_cmd=%.1f m off=%.1f m delta_cmd=%.1f m",
+			 static_cast<double>(_vehicle_global_position.alt),
+			 static_cast<double>(_midcourse_target_info.alt),
+			 static_cast<double>(target_command_alt),
+			 static_cast<double>(_param_midcourse_target_alt_offset.get()),
+			 static_cast<double>(target_command_alt - _vehicle_global_position.alt));
+	}
+
 	PX4_INFO("midcourse geotrack: active=%d ownship_age=%.3f target_tx_age=%.3f",
 		 _midcourse_geotrack_active,
 		 static_cast<double>(_last_midcourse_ownship_time > 0 ?
@@ -397,10 +455,16 @@ void DytGuidance::show_status()
 	PX4_INFO("payload lost hold: %d", _payload_lost_hold);
 	PX4_INFO("preconditions ok: %d", preconditions_ok());
 	PX4_INFO("activation request: %d", activation_requested());
+	PX4_INFO("midcourse pointing request: %d", midcourse_pointing_requested());
 	PX4_INFO("manual activation: %d", _manual_activation);
 	PX4_INFO("activation aux value: %.2f", static_cast<double>(aux_value(_param_act_aux.get())));
 	PX4_INFO("activation button: %ld buttons=0x%04x",
 		 static_cast<long>(_param_act_btn.get()), static_cast<unsigned>(_manual_control.buttons));
+	PX4_INFO("midcourse aux: %ld value: %.2f",
+		 static_cast<long>(_param_midcourse_act_aux.get()),
+		 static_cast<double>(aux_value(_param_midcourse_act_aux.get())));
+	PX4_INFO("midcourse button: %ld buttons=0x%04x",
+		 static_cast<long>(_param_midcourse_act_btn.get()), static_cast<unsigned>(_manual_control.buttons));
 	PX4_INFO("payload switch: %u", static_cast<unsigned>(_manual_switches.payload_power_switch));
 	PX4_INFO("auto activation: en=%ld streak=%d/%ld",
 		 static_cast<long>(_param_auto_enable.get()), _auto_lock_streak, static_cast<long>(_param_auto_frames.get()));
@@ -415,6 +479,11 @@ void DytGuidance::show_status()
 	PX4_INFO("home angle: yaw=%.1f pitch=%.1f",
 		 static_cast<double>(_param_home_yaw_deg.get()),
 		 static_cast<double>(_param_home_pitch_deg.get()));
+	PX4_INFO("midcourse mount rotation: en=%ld rpy=(%.1f %.1f %.1f) deg",
+		 static_cast<long>(_param_mount_enable.get()),
+		 static_cast<double>(_param_mount_roll_deg.get()),
+		 static_cast<double>(_param_mount_pitch_deg.get()),
+		 static_cast<double>(_param_mount_yaw_deg.get()));
 	PX4_INFO("command pubs: %lu", static_cast<unsigned long>(_command_pub_count));
 	PX4_INFO("last command: %u", static_cast<unsigned>(_last_command));
 	PX4_INFO("last command age: %.3f s", static_cast<double>(_last_command_time > 0 ?
@@ -435,6 +504,7 @@ void DytGuidance::update_subscriptions()
 	_vehicle_attitude_sub.update(&_vehicle_attitude);
 	_vehicle_global_position_sub.update(&_vehicle_global_position);
 	_vehicle_local_position_sub.update(&_vehicle_local_position);
+	_vehicle_local_position_setpoint_sub.update(&_vehicle_local_position_setpoint);
 	_vehicle_status_sub.update(&_vehicle_status);
 	_vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity);
 	_airspeed_validated_sub.update(&_airspeed_validated);
@@ -519,6 +589,18 @@ bool DytGuidance::activation_requested() const
 	       || payload_switch_active();
 }
 
+bool DytGuidance::midcourse_pointing_requested() const
+{
+	if (_param_coop_enable.get() <= 0) {
+		return false;
+	}
+
+	const int act_aux = _param_midcourse_act_aux.get();
+	const int act_btn = _param_midcourse_act_btn.get();
+
+	return (act_aux == 0 && act_btn < 0) || aux_switch_active(act_aux) || button_active(act_btn);
+}
+
 bool DytGuidance::preconditions_ok() const
 {
 	return _vehicle_status.arming_state == vehicle_status_s::ARMING_STATE_ARMED
@@ -574,8 +656,9 @@ bool DytGuidance::build_los_body(const dyt_target_s &target, Vector3f &los_body)
 	const float yaw = target.gimbal_yaw_rad * static_cast<float>(_param_yaw_sign.get())
 			  + math::radians(_param_yaw_off_deg.get());
 
-	const Dcmf gimbal_to_body(Eulerf(roll, pitch, yaw));
-	los_body = gimbal_to_body * los_gimbal;
+	const Dcmf gimbal_to_mount(Eulerf(roll, pitch, yaw));
+	const Vector3f los_mount = gimbal_to_mount * los_gimbal;
+	los_body = rotate_mount_los_to_body(los_mount);
 
 	if (!PX4_ISFINITE(los_body(0)) || !PX4_ISFINITE(los_body(1)) || !PX4_ISFINITE(los_body(2))
 	    || los_body.norm_squared() < 1e-6f) {
@@ -961,11 +1044,24 @@ void DytGuidance::publish_track_setpoint(const TrackProfile &profile)
 		vel_xy = previous_vel_xy + delta_vel_xy.normalized() * max_delta_xy;
 	}
 
+	const float handoff_blend = track_handoff_blend(now);
+
+	if (handoff_blend < 1.f) {
+		const Vector2f handoff_vel_xy(_track_handoff_velocity(0), _track_handoff_velocity(1));
+		vel_xy = handoff_vel_xy * (1.f - handoff_blend) + vel_xy * handoff_blend;
+	}
+
 	_velocity_sp(0) = vel_xy(0);
 	_velocity_sp(1) = vel_xy(1);
 	const float z_scale = math::constrain(_param_z_scale.get(), 0.f, 1.f);
 	const float max_dz = math::max(_param_max_dz.get(), 0.1f);
-	_velocity_sp(2) = math::constrain(_los_ned(2) * profile.v_cmd * z_scale, -max_dz, max_dz);
+	float velocity_sp_z = math::constrain(_los_ned(2) * profile.v_cmd * z_scale, -max_dz, max_dz);
+
+	if (handoff_blend < 1.f) {
+		velocity_sp_z = _track_handoff_velocity(2) * (1.f - handoff_blend) + velocity_sp_z * handoff_blend;
+	}
+
+	_velocity_sp(2) = velocity_sp_z;
 	_last_track_setpoint_time = now;
 
 	Vector3f horizontal_vehicle_velocity(vehicle_velocity(0), vehicle_velocity(1), 0.f);
@@ -1102,6 +1198,66 @@ void DytGuidance::publish_status()
 	_dyt_guidance_status_pub.publish(status);
 }
 
+void DytGuidance::capture_track_handoff_velocity()
+{
+	Vector3f velocity(PX4_ISFINITE(_vehicle_local_position.vx) ? _vehicle_local_position.vx : 0.f,
+			  PX4_ISFINITE(_vehicle_local_position.vy) ? _vehicle_local_position.vy : 0.f,
+			  PX4_ISFINITE(_vehicle_local_position.vz) ? _vehicle_local_position.vz : 0.f);
+
+	const bool setpoint_fresh = _vehicle_local_position_setpoint.timestamp != 0 &&
+				    hrt_elapsed_time(&_vehicle_local_position_setpoint.timestamp) <=
+				    TRACK_HANDOFF_SETPOINT_MAX_AGE;
+
+	if (setpoint_fresh) {
+		if (PX4_ISFINITE(_vehicle_local_position_setpoint.vx) &&
+		    PX4_ISFINITE(_vehicle_local_position_setpoint.vy)) {
+			velocity(0) = _vehicle_local_position_setpoint.vx;
+			velocity(1) = _vehicle_local_position_setpoint.vy;
+		}
+
+		if (PX4_ISFINITE(_vehicle_local_position_setpoint.vz)) {
+			velocity(2) = _vehicle_local_position_setpoint.vz;
+		}
+	}
+
+	Vector2f velocity_xy(velocity(0), velocity(1));
+	const float max_vel = math::max(_param_max_vel.get(), 0.1f);
+
+	if (velocity_xy.norm() > max_vel) {
+		velocity_xy = velocity_xy.normalized() * max_vel;
+		velocity(0) = velocity_xy(0);
+		velocity(1) = velocity_xy(1);
+	}
+
+	const float max_dz = math::max(_param_max_dz.get(), 0.1f);
+	velocity(2) = math::constrain(velocity(2), -max_dz, max_dz);
+
+	_track_handoff_velocity = velocity;
+	_track_handoff_time = hrt_absolute_time();
+	_track_handoff_velocity_valid = true;
+	_velocity_sp = velocity;
+	_acceleration_sp.zero();
+	_last_track_setpoint_time = _track_handoff_time;
+}
+
+float DytGuidance::track_handoff_blend(hrt_abstime now) const
+{
+	if (!_track_handoff_velocity_valid || _track_handoff_time == 0) {
+		return 1.f;
+	}
+
+	const float blend_time_s = math::max(_param_handoff_blend_time.get(), 0.f);
+
+	if (blend_time_s <= 0.f) {
+		return 1.f;
+	}
+
+	const float elapsed_s = (now - _track_handoff_time) * 1e-6f;
+	float blend = math::constrain(elapsed_s / blend_time_s, 0.f, 1.f);
+	blend = blend * blend * (3.f - 2.f * blend);
+	return blend;
+}
+
 void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 {
 	_state = new_state;
@@ -1120,6 +1276,8 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_midcourse_burst_remaining = 0;
 		_midcourse_yaw_deg = NAN;
 		_midcourse_pitch_deg = NAN;
+		_track_handoff_time = 0;
+		_track_handoff_velocity_valid = false;
 	} else if (new_state == TaskState::TrackFollow || new_state == TaskState::TrackIntercept) {
 		send_dyt_geo_track_exit();
 		_next_scan_time = 0;
@@ -1134,20 +1292,7 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
 		_candidate_ignored_sample_time = 0;
-		_last_track_setpoint_time = _state_enter_time;
-
-		if (_vehicle_local_position.v_xy_valid) {
-			_velocity_sp(0) = PX4_ISFINITE(_vehicle_local_position.vx) ? _vehicle_local_position.vx : 0.f;
-			_velocity_sp(1) = PX4_ISFINITE(_vehicle_local_position.vy) ? _vehicle_local_position.vy : 0.f;
-
-		} else {
-			_velocity_sp(0) = 0.f;
-			_velocity_sp(1) = 0.f;
-		}
-
-		_velocity_sp(2) = _vehicle_local_position.v_z_valid && PX4_ISFINITE(_vehicle_local_position.vz) ?
-				  _vehicle_local_position.vz : 0.f;
-		_acceleration_sp.zero();
+		capture_track_handoff_velocity();
 	} else if (new_state == TaskState::LostHold) {
 		_relock_streak = 0;
 		_last_home_command_time = 0;
@@ -1164,11 +1309,13 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
 		_candidate_ignored_sample_time = 0;
+		_track_handoff_time = 0;
+		_track_handoff_velocity_valid = false;
 		clear_observations();
 		capture_hold_setpoint();
 
 		if (lost_reason != dyt_guidance_status_s::LOST_REASON_TIMEOUT &&
-		    !update_midcourse_geo_tracking(_state_enter_time, true)) {
+		    !update_midcourse_pointing(_state_enter_time, true)) {
 			send_home_angle_command();
 		}
 
@@ -1194,6 +1341,8 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
 		_candidate_ignored_sample_time = 0;
+		_track_handoff_time = 0;
+		_track_handoff_velocity_valid = false;
 	} else if (new_state == TaskState::Abort) {
 		send_dyt_geo_track_exit();
 		_next_midcourse_point_time = 0;
@@ -1205,6 +1354,8 @@ void DytGuidance::enter_state(TaskState new_state, uint8_t lost_reason)
 		_candidate_lock_start_time = 0;
 		_candidate_ignore_until = 0;
 		_candidate_ignored_sample_time = 0;
+		_track_handoff_time = 0;
+		_track_handoff_velocity_valid = false;
 	}
 }
 
@@ -1270,7 +1421,7 @@ bool DytGuidance::update_lost_reacquire(hrt_abstime now, hrt_abstime lost_enter_
 	const hrt_abstime center_delay = static_cast<hrt_abstime>(center_ms) * 1000ULL;
 
 	if ((now - enter_time) < center_delay) {
-		if (home_command_enabled && update_midcourse_geo_tracking(now)) {
+		if (home_command_enabled && update_midcourse_pointing(now)) {
 			_last_home_command_time = now;
 
 		} else if (home_command_enabled &&
@@ -1308,7 +1459,7 @@ void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
 		_last_hint_lock_time = 0;
 		_search_pause_until = 0;
 		clear_observations();
-		if (!update_midcourse_geo_tracking(now, true)) {
+		if (!update_midcourse_pointing(now, true)) {
 			send_home_angle_command();
 		}
 		reset_search_scan(now);
@@ -1319,7 +1470,7 @@ void DytGuidance::update_payload_only_reacquire(hrt_abstime now)
 		if (target_lock_candidate()) {
 			update_hint_autolock(now);
 		} else {
-			update_midcourse_geo_tracking(now);
+			update_midcourse_pointing(now);
 		}
 	}
 }
@@ -1394,7 +1545,7 @@ void DytGuidance::send_dyt_geo_track_target(hrt_abstime now, bool force)
 	msg.command = dyt_command_s::CMD_GEO_TRACK;
 	msg.lat = _midcourse_target_info.lat;
 	msg.lon = _midcourse_target_info.lon;
-	msg.alt = static_cast<float>(_midcourse_target_info.alt);
+	msg.alt = midcourse_target_command_alt();
 	_dyt_command_pub.publish(msg);
 	_last_command = msg.command;
 	_last_command_time = now;
@@ -1466,6 +1617,14 @@ bool DytGuidance::midcourse_target_geo_valid() const
 	       PX4_ISFINITE(static_cast<float>(_midcourse_target_info.alt));
 }
 
+float DytGuidance::midcourse_target_command_alt() const
+{
+	const float offset = _param_midcourse_target_alt_offset.get();
+	const float finite_offset = PX4_ISFINITE(offset) ? offset : 0.f;
+
+	return static_cast<float>(_midcourse_target_info.alt) + finite_offset;
+}
+
 bool DytGuidance::midcourse_target_position_local(Vector3f &target_position) const
 {
 	if (!local_position_global_valid() || _last_midcourse_target_time == 0) {
@@ -1486,13 +1645,15 @@ bool DytGuidance::midcourse_target_position_local(Vector3f &target_position) con
 	float y = NAN;
 	map_ref.project(_midcourse_target_info.lat, _midcourse_target_info.lon, x, y);
 
-	if (!PX4_ISFINITE(x) || !PX4_ISFINITE(y) || !PX4_ISFINITE(_midcourse_target_info.alt)) {
+	const float target_alt = midcourse_target_command_alt();
+
+	if (!PX4_ISFINITE(x) || !PX4_ISFINITE(y) || !PX4_ISFINITE(target_alt)) {
 		return false;
 	}
 
 	target_position(0) = x;
 	target_position(1) = y;
-	target_position(2) = static_cast<float>(_vehicle_local_position.ref_alt) - static_cast<float>(_midcourse_target_info.alt);
+	target_position(2) = static_cast<float>(_vehicle_local_position.ref_alt) - target_alt;
 
 	return PX4_ISFINITE(target_position(2));
 }
@@ -1507,6 +1668,26 @@ bool DytGuidance::compute_midcourse_gimbal_angle(float &yaw_deg, float &pitch_de
 
 	const Vector3f own_position(_vehicle_local_position.x, _vehicle_local_position.y, _vehicle_local_position.z);
 	Vector3f los_ned = target_position - own_position;
+	const float prediction_s = math::constrain(_param_midcourse_gimbal_prediction.get(), 0.f, 0.5f);
+
+	if (prediction_s > 0.f) {
+		const Vector3f target_velocity(static_cast<float>(_midcourse_target_info.vx),
+					       static_cast<float>(_midcourse_target_info.vy),
+					       static_cast<float>(_midcourse_target_info.vz));
+		const Vector3f own_velocity(_vehicle_local_position.vx, _vehicle_local_position.vy, _vehicle_local_position.vz);
+		const bool target_velocity_valid = PX4_ISFINITE(target_velocity(0)) && PX4_ISFINITE(target_velocity(1)) &&
+						   PX4_ISFINITE(target_velocity(2));
+		const bool own_velocity_valid = PX4_ISFINITE(own_velocity(0)) && PX4_ISFINITE(own_velocity(1)) &&
+						PX4_ISFINITE(own_velocity(2));
+
+		if (target_velocity_valid && own_velocity_valid) {
+			const float target_age_s = _last_midcourse_target_time != 0 ?
+						   math::constrain((hrt_absolute_time() - _last_midcourse_target_time) * 1e-6f, 0.f, 1.f) :
+						   0.f;
+
+			los_ned += target_velocity * (target_age_s + prediction_s) - own_velocity * prediction_s;
+		}
+	}
 
 	if (!PX4_ISFINITE(los_ned(0)) || !PX4_ISFINITE(los_ned(1)) || !PX4_ISFINITE(los_ned(2))
 	    || los_ned.norm_squared() < 1e-4f) {
@@ -1521,9 +1702,16 @@ bool DytGuidance::compute_midcourse_gimbal_angle(float &yaw_deg, float &pitch_de
 		return false;
 	}
 
-	const float yaw_body = atan2f(los_body(1), los_body(0));
-	const float horizontal_norm = sqrtf(los_body(0) * los_body(0) + los_body(1) * los_body(1));
-	const float pitch_body = atan2f(-los_body(2), horizontal_norm);
+	const Vector3f los_mount = rotate_body_los_to_mount(los_body);
+
+	if (!PX4_ISFINITE(los_mount(0)) || !PX4_ISFINITE(los_mount(1)) || !PX4_ISFINITE(los_mount(2))
+	    || los_mount.norm_squared() < 1e-4f) {
+		return false;
+	}
+
+	const float yaw_body = atan2f(los_mount(1), los_mount(0));
+	const float horizontal_norm = sqrtf(los_mount(0) * los_mount(0) + los_mount(1) * los_mount(1));
+	const float pitch_body = atan2f(-los_mount(2), horizontal_norm);
 
 	const float yaw_sign = static_cast<float>(_param_yaw_sign.get()) >= 0.f ? 1.f : -1.f;
 	const float pitch_sign = static_cast<float>(_param_pitch_sign.get()) >= 0.f ? 1.f : -1.f;
@@ -1532,6 +1720,47 @@ bool DytGuidance::compute_midcourse_gimbal_angle(float &yaw_deg, float &pitch_de
 	pitch_deg = math::degrees((pitch_body - math::radians(_param_pitch_off_deg.get())) / pitch_sign);
 
 	return PX4_ISFINITE(yaw_deg) && PX4_ISFINITE(pitch_deg);
+}
+
+Vector3f DytGuidance::rotate_body_los_to_mount(const Vector3f &los_body) const
+{
+	if (_param_mount_enable.get() <= 0) {
+		return los_body;
+	}
+
+	const Dcmf mount_to_body(Eulerf(math::radians(finite_param_deg(_param_mount_roll_deg.get())),
+					math::radians(finite_param_deg(_param_mount_pitch_deg.get())),
+					math::radians(finite_param_deg(_param_mount_yaw_deg.get()))));
+
+	return mount_to_body.transpose() * los_body;
+}
+
+Vector3f DytGuidance::rotate_mount_los_to_body(const Vector3f &los_mount) const
+{
+	if (_param_mount_enable.get() <= 0) {
+		return los_mount;
+	}
+
+	const Dcmf mount_to_body(Eulerf(math::radians(finite_param_deg(_param_mount_roll_deg.get())),
+					math::radians(finite_param_deg(_param_mount_pitch_deg.get())),
+					math::radians(finite_param_deg(_param_mount_yaw_deg.get()))));
+
+	return mount_to_body * los_mount;
+}
+
+float DytGuidance::finite_param_deg(float value) const
+{
+	return PX4_ISFINITE(value) ? value : 0.f;
+}
+
+bool DytGuidance::update_midcourse_pointing(hrt_abstime now, bool force)
+{
+	if (_param_midcourse_geo_enable.get() > 0) {
+		return update_midcourse_geo_tracking(now, force);
+	}
+
+	send_dyt_geo_track_exit();
+	return update_midcourse_gimbal_pointing(now, force);
 }
 
 bool DytGuidance::update_midcourse_geo_tracking(hrt_abstime now, bool force)
@@ -1553,8 +1782,6 @@ bool DytGuidance::update_midcourse_geo_tracking(hrt_abstime now, bool force)
 
 bool DytGuidance::update_midcourse_gimbal_pointing(hrt_abstime now, bool force)
 {
-	// Disabled for DYT midcourse: the payload can perform geographic tracking
-	// internally when it receives EB 91 ownship state and EB 90 3A target packets.
 	if (target_locked()) {
 		return false;
 	}
@@ -1914,6 +2141,7 @@ void DytGuidance::Run()
 
 	const hrt_abstime now = hrt_absolute_time();
 	const bool activation_request = activation_requested();
+	const bool midcourse_pointing_request = midcourse_pointing_requested();
 	const bool auto_activation_enabled = _param_auto_enable.get() > 0;
 	const bool intercept_request = aux_switch_active(_param_int_aux.get());
 
@@ -1958,6 +2186,15 @@ void DytGuidance::Run()
 
 	switch (_state) {
 	case TaskState::Idle:
+		if (midcourse_pointing_request && !activation_request) {
+			// Midcourse-only operation: keep the payload geographically pointed
+			// while cooperative_rendezvous owns aircraft motion.
+			update_midcourse_pointing(now);
+
+		} else if (_midcourse_geotrack_active && !midcourse_pointing_request) {
+			send_dyt_geo_track_exit();
+		}
+
 		break;
 
 	case TaskState::SearchWaitLock:
@@ -1976,7 +2213,7 @@ void DytGuidance::Run()
 				_search_pause_until = now + 1200_ms;
 				_next_scan_time = now + 100_ms;
 			} else {
-				update_midcourse_geo_tracking(now);
+				update_midcourse_pointing(now);
 			}
 
 			if ((now - _state_enter_time) > static_cast<hrt_abstime>(_param_wait_ms.get()) * 1000ULL) {
@@ -2045,10 +2282,10 @@ void DytGuidance::Run()
 				if (target_lock_candidate()) {
 					update_hint_autolock(now);
 				} else {
-					update_midcourse_geo_tracking(now);
+					update_midcourse_pointing(now);
 				}
 			} else {
-				update_midcourse_geo_tracking(now);
+				update_midcourse_pointing(now);
 			}
 		}
 		break;
@@ -2059,7 +2296,7 @@ void DytGuidance::Run()
 	}
 
 	if (_state == TaskState::SearchWaitLock || _state == TaskState::LostHold) {
-		update_midcourse_geo_tracking(now);
+		update_midcourse_pointing(now);
 
 		// During midcourse handoff the seeker only drives the gimbal while searching / lost;
 		// aircraft motion stays with the position-sharing follower so there is no hover

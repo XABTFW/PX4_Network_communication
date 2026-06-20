@@ -190,19 +190,29 @@ bool CooperativeRendezvous::target_position_local(const vehicle_local_position_s
 
 	float offset_x = _options.target_offset(0);
 	float offset_y = _options.target_offset(1);
-	const float target_distance = _param_dist.get();
 
-	if (PX4_ISFINITE(target_distance) && target_distance >= 0.f) {
-		const float offset_norm = sqrtf(offset_x * offset_x + offset_y * offset_y);
+	if (_param_xy_offset_enable.get() > 0) {
+		const float x_offset = _param_x_offset.get();
+		const float y_offset = _param_y_offset.get();
 
-		if (offset_norm > 0.001f) {
-			const float scale = target_distance / offset_norm;
-			offset_x *= scale;
-			offset_y *= scale;
+		offset_x = PX4_ISFINITE(x_offset) ? x_offset : 0.f;
+		offset_y = PX4_ISFINITE(y_offset) ? y_offset : 0.f;
 
-		} else {
-			offset_x = -target_distance;
-			offset_y = 0.f;
+	} else {
+		const float target_distance = _param_dist.get();
+
+		if (PX4_ISFINITE(target_distance) && target_distance >= 0.f) {
+			const float offset_norm = sqrtf(offset_x * offset_x + offset_y * offset_y);
+
+			if (offset_norm > 0.001f) {
+				const float scale = target_distance / offset_norm;
+				offset_x *= scale;
+				offset_y *= scale;
+
+			} else {
+				offset_x = -target_distance;
+				offset_y = 0.f;
+			}
 		}
 	}
 
@@ -379,6 +389,7 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 		}
 
 		hold_position(local_pos);
+		reset_velocity_slew();
 		return;
 	}
 
@@ -409,6 +420,8 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 		velocity_sp(1) += approach_xy(1);
 	}
 
+	slew_horizontal_velocity(velocity_sp, local_pos);
+
 	const float yaw = PX4_ISFINITE(_target_info.yaw) ? static_cast<float>(_target_info.yaw) : local_pos.heading;
 
 	publish_offboard_heartbeat(true, false);
@@ -432,6 +445,53 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 			 (double)target_position(0), (double)target_position(1), (double)target_position(2));
 		_last_status_log = now;
 	}
+}
+
+void CooperativeRendezvous::slew_horizontal_velocity(matrix::Vector3f &velocity_sp,
+		const vehicle_local_position_s &local_pos)
+{
+	const float slew_rate = _param_velocity_slew.get();
+
+	if (!PX4_ISFINITE(slew_rate) || slew_rate <= 0.f) {
+		reset_velocity_slew();
+		return;
+	}
+
+	const hrt_abstime now = hrt_absolute_time();
+	matrix::Vector2f target_velocity_xy(velocity_sp(0), velocity_sp(1));
+
+	if (!PX4_ISFINITE(target_velocity_xy(0)) || !PX4_ISFINITE(target_velocity_xy(1))) {
+		target_velocity_xy.zero();
+	}
+
+	if (_last_velocity_slew_time == 0) {
+		_last_velocity_sp_xy(0) = PX4_ISFINITE(local_pos.vx) ? local_pos.vx : 0.f;
+		_last_velocity_sp_xy(1) = PX4_ISFINITE(local_pos.vy) ? local_pos.vy : 0.f;
+		_last_velocity_slew_time = now;
+	}
+
+	if (!PX4_ISFINITE(_last_velocity_sp_xy(0)) || !PX4_ISFINITE(_last_velocity_sp_xy(1))) {
+		_last_velocity_sp_xy.zero();
+	}
+
+	const float dt = math::constrain((now - _last_velocity_slew_time) * 1e-6f, 0.005f, 0.2f);
+	const float max_delta = math::constrain(slew_rate, 0.1f, 20.f) * dt;
+	const matrix::Vector2f delta = target_velocity_xy - _last_velocity_sp_xy;
+
+	if (delta.norm() > max_delta) {
+		target_velocity_xy = _last_velocity_sp_xy + delta.normalized() * max_delta;
+	}
+
+	_last_velocity_sp_xy = target_velocity_xy;
+	_last_velocity_slew_time = now;
+	velocity_sp(0) = target_velocity_xy(0);
+	velocity_sp(1) = target_velocity_xy(1);
+}
+
+void CooperativeRendezvous::reset_velocity_slew()
+{
+	_last_velocity_slew_time = 0;
+	_last_velocity_sp_xy.zero();
 }
 
 void CooperativeRendezvous::Run()
@@ -465,6 +525,7 @@ void CooperativeRendezvous::Run()
 
 	if (active_role() == Role::Rendezvous) {
 		if (!rendezvous_switch_enabled() || dyt_guidance_active()) {
+			reset_velocity_slew();
 			return;
 		}
 
@@ -472,7 +533,11 @@ void CooperativeRendezvous::Run()
 
 	} else if (active_role() == Role::Broadcast && status.arming_state == vehicle_status_s::ARMING_STATE_ARMED &&
 		   rendezvous_switch_enabled() && !dyt_guidance_active()) {
+		reset_velocity_slew();
 		keep_current_position_setpoint(local_pos);
+
+	} else {
+		reset_velocity_slew();
 	}
 }
 
@@ -493,14 +558,18 @@ int CooperativeRendezvous::print_status()
 		break;
 	}
 
-	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) dist=%.1f app_spd=%.1f slow=%.1f alt_diff=%.1f",
+	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) xy_en=%ld xy=(%.1f %.1f) dist=%.1f app_spd=%.1f slow=%.1f vslew=%.1f alt_diff=%.1f",
 		 _vehicle_id, role, _options.target_id,
 		 (double)_options.target_offset(0),
 		 (double)_options.target_offset(1),
 		 (double)_options.target_offset(2),
+		 static_cast<long>(_param_xy_offset_enable.get()),
+		 (double)_param_x_offset.get(),
+		 (double)_param_y_offset.get(),
 		 (double)_param_dist.get(),
 		 (double)_param_app_speed.get(),
 		 (double)_param_slow_radius.get(),
+		 (double)_param_velocity_slew.get(),
 		 (double)_param_alt_diff.get());
 	PX4_INFO("activation aux=%d enabled=%d dyt_active=%d",
 		 static_cast<int>(_param_act_aux.get()), rendezvous_switch_enabled(), dyt_guidance_active());

@@ -36,6 +36,7 @@
 
 #include <uORB/topics/trajectory_setpoint.h>
 #include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/vehicle_global_position.h>
 #include <uORB/topics/sensor_gps.h>
 #include <uORB/topics/home_position.h>
 #include <uORB/topics/cooperative_position.h>
@@ -68,6 +69,7 @@ private:
 	}
 
 	uORB::Subscription _lpos_sub{ORB_ID(vehicle_local_position)};
+	uORB::Subscription _gpos_sub{ORB_ID(vehicle_global_position)};
 	uORB::Subscription _trajectory_sub{ORB_ID(trajectory_setpoint)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Subscription _gps_sub{ORB_ID(sensor_gps)};
@@ -127,17 +129,21 @@ private:
 		// 始终发送位置信息，不依赖于位置是否更新
 		// 这样即使主机静止悬停，从机也能持续收到主机位置
 
-		vehicle_local_position_s local_pos;
-		trajectory_setpoint_s trajectory;
-		vehicle_status_s vehicle_status;
-		sensor_gps_s gps;
-		home_position_s home;
+		vehicle_local_position_s local_pos{};
+		vehicle_global_position_s global_pos{};
+		trajectory_setpoint_s trajectory{};
+		vehicle_status_s vehicle_status{};
+		sensor_gps_s gps{};
+		home_position_s home{};
 
 		_lpos_sub.copy(&local_pos);
+		_gpos_sub.copy(&global_pos);
 		_trajectory_sub.copy(&trajectory);
 		_vehicle_status_sub.copy(&vehicle_status);
 		_gps_sub.copy(&gps);
 		_home_position_sub.copy(&home);
+
+		const bool global_alt_valid = global_pos.timestamp != 0 && global_pos.alt_valid && PX4_ISFINITE(global_pos.alt);
 
 		// 填充 MAVLink 消息
 		mavlink_uav_info_t msg{};;
@@ -173,10 +179,14 @@ private:
 			msg.vy = trajectory.velocity[1];
 			msg.vz = trajectory.velocity[2];
 		} else {
-			// 从机：直接使用 GPS 信息，更简单更准确
+			if (!global_alt_valid) {
+				return false;
+			}
+
+			// 从机：真实位置使用 GPS 经纬度 + 融合后的全局高度，和 DYT 本机高度源保持一致
 			msg.lat = gps.latitude_deg;
 			msg.lon = gps.longitude_deg;
-			msg.rel_alt = gps.altitude_msl_m;  // GPS 高度（MSL）
+			msg.rel_alt = global_pos.alt;      // vehicle_global_position 高度（AMSL）
 			msg.vx = local_pos.vx;             // 真实速度
 			msg.vy = local_pos.vy;
 			msg.vz = local_pos.vz;
@@ -222,11 +232,11 @@ private:
 		// 主机额外发送一条真实位置消息，用于避撞
 		// 这条消息的 mavid 加上偏移量（+100），接收端识别后用于避撞
 		// 这样主机同时发送：目标位置（跟随用）+ 真实位置（避撞用）
-		if (_is_leader) {
+		if (_is_leader && global_alt_valid) {
 			mavlink_uav_info_t msg_real{};
 			msg_real.lat = gps.latitude_deg;
 			msg_real.lon = gps.longitude_deg;
-			msg_real.rel_alt = gps.altitude_msl_m;
+			msg_real.rel_alt = global_pos.alt;
 			msg_real.vx = local_pos.vx;
 			msg_real.vy = local_pos.vy;
 			msg_real.vz = local_pos.vz;

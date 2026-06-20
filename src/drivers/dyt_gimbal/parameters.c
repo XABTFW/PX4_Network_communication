@@ -128,3 +128,139 @@ PARAM_DEFINE_FLOAT(DYT_HOME_YAW, 0.f);
  * @group DYT Gimbal
  */
 PARAM_DEFINE_FLOAT(DYT_HOME_PIT, 90.f);
+
+/**
+ * DYT geo-track roll sign
+ *
+ * Sign applied to vehicle roll before sending the DYT ownship state frame used
+ * by geographic tracking. Use this to compensate payload installation
+ * conventions without changing aircraft control.
+ *
+ * @value -1 Invert
+ * @value 1 Normal
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_INT32(DYT_GEO_RSIGN, 1);
+
+/**
+ * DYT geo-track pitch sign
+ *
+ * Sign applied to vehicle pitch before sending the DYT ownship state frame used
+ * by geographic tracking. Set to -1 if geographic tracking drives pitch in the
+ * opposite direction for the payload installation.
+ *
+ * @value -1 Invert
+ * @value 1 Normal
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_INT32(DYT_GEO_PSIGN, 1);
+
+/**
+ * DYT geo-track yaw sign
+ *
+ * Sign applied to vehicle yaw before sending the DYT ownship state frame used
+ * by geographic tracking.
+ *
+ * @value -1 Invert
+ * @value 1 Normal
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_INT32(DYT_GEO_YSIGN, 1);
+
+/**
+ * DYT geo-track roll offset
+ *
+ * Offset added after DYT_GEO_RSIGN is applied to vehicle roll in the ownship
+ * state frame used by geographic tracking.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_FLOAT(DYT_GEO_ROFF, 0.f);
+
+/**
+ * DYT geo-track pitch offset
+ *
+ * Offset added after DYT_GEO_PSIGN is applied to vehicle pitch in the ownship
+ * state frame used by geographic tracking. For an upward-looking installation,
+ * try +/-90 degrees only after first checking the sign.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_FLOAT(DYT_GEO_POFF, 0.f);
+
+/**
+ * DYT geo-track yaw offset
+ *
+ * Offset added after DYT_GEO_YSIGN is applied to vehicle yaw in the ownship
+ * state frame used by geographic tracking.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_FLOAT(DYT_GEO_YOFF, 0.f);
+
+/**
+ * DYT geo-track mount rotation enable
+ *
+ * Enables a full Euler rotation from gimbal installation frame to aircraft body
+ * frame before sending the ownship attitude used by geographic tracking. Keep
+ * disabled to use the legacy per-axis sign and offset correction.
+ *
+ * @boolean
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_INT32(DYT_GEO_MNT_EN, 0);
+
+/**
+ * DYT geo-track mount roll
+ *
+ * Roll angle of the gimbal installation frame relative to the aircraft body
+ * frame. Applied as part of a full Euler rotation when DYT_GEO_MNT_EN is set.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_FLOAT(DYT_GEO_MNT_R, 0.f);
+
+/**
+ * DYT geo-track mount pitch
+ *
+ * Pitch angle of the gimbal installation frame relative to the aircraft body
+ * frame. For an installation where gimbal +X points along aircraft -Z, start
+ * with +90 or -90 degrees and verify the direction on the ground.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_FLOAT(DYT_GEO_MNT_P, 0.f);
+
+/**
+ * DYT geo-track mount yaw
+ *
+ * Yaw angle of the gimbal installation frame relative to the aircraft body
+ * frame. Applied as part of a full Euler rotation when DYT_GEO_MNT_EN is set.
+ *
+ * @unit deg
+ * @min -180
+ * @max 180
+ * @decimal 1
+ * @group DYT Gimbal
+ */
+PARAM_DEFINE_FLOAT(DYT_GEO_MNT_Y, 0.f);

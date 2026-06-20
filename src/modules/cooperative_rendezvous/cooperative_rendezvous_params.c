@@ -45,6 +45,47 @@ PARAM_DEFINE_INT32(CRDZ_ACT_BTN, -1);
 PARAM_DEFINE_FLOAT(CRDZ_DIST, 0.f);
 
 /**
+ * Enable explicit horizontal offsets
+ *
+ * When enabled, CRDZ_X_OFF and CRDZ_Y_OFF directly define the target-relative
+ * NED horizontal offset. CRDZ_DIST is ignored for horizontal offset generation.
+ * Keep disabled to use the legacy CRDZ_DIST scaling of the startup -x/-y
+ * offset direction.
+ *
+ * @boolean
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_INT32(CRDZ_XY_OFF_EN, 0);
+
+/**
+ * Target NED X offset
+ *
+ * Exact NED X offset from the target aircraft used when CRDZ_XY_OFF_EN is set.
+ * Positive is North in the local NED frame.
+ *
+ * @unit m
+ * @min -100
+ * @max 100
+ * @decimal 1
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_X_OFF, -5.f);
+
+/**
+ * Target NED Y offset
+ *
+ * Exact NED Y offset from the target aircraft used when CRDZ_XY_OFF_EN is set.
+ * Positive is East in the local NED frame.
+ *
+ * @unit m
+ * @min -100
+ * @max 100
+ * @decimal 1
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_Y_OFF, 0.f);
+
+/**
  * Approach speed toward target position
  *
  * Horizontal closing speed added while the rendezvous aircraft has not reached
@@ -75,6 +116,21 @@ PARAM_DEFINE_FLOAT(CRDZ_APP_SPD, 40.f);
  * @group Cooperative Rendezvous
  */
 PARAM_DEFINE_FLOAT(CRDZ_SLOW_RAD, 5.f);
+
+/**
+ * Horizontal velocity slew limit
+ *
+ * Limits how quickly the rendezvous horizontal velocity setpoint may change.
+ * Set to 0 to disable the limit and keep the legacy direct target-velocity
+ * feed-forward behavior.
+ *
+ * @unit m/s^2
+ * @min 0
+ * @max 20
+ * @decimal 1
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_VSLEW, 0.f);
 
 /**
  * Altitude difference from target
