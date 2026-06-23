@@ -169,14 +169,16 @@ bool CooperativeRendezvous::update_target_from_link()
 	return updated;
 }
 
-bool CooperativeRendezvous::target_position_local(const vehicle_local_position_s &local_pos,
-		matrix::Vector3f &target_position) const
+bool CooperativeRendezvous::target_state_local(const vehicle_local_position_s &local_pos,
+		matrix::Vector3f &target_position, matrix::Vector3f &target_velocity)
 {
 	if (!_map_ref_initialized || _last_target_time == 0) {
+		reset_target_filter();
 		return false;
 	}
 
 	if ((hrt_absolute_time() - _last_target_time) > static_cast<hrt_abstime>(_options.target_timeout_s * 1_s)) {
+		reset_target_filter();
 		return false;
 	}
 
@@ -185,8 +187,19 @@ bool CooperativeRendezvous::target_position_local(const vehicle_local_position_s
 	_map_ref.project(_target_info.lat, _target_info.lon, x, y);
 
 	if (!PX4_ISFINITE(x) || !PX4_ISFINITE(y)) {
+		reset_target_filter();
 		return false;
 	}
+
+	matrix::Vector3f raw_position(x, y, static_cast<float>(local_pos.ref_alt) - static_cast<float>(_target_info.alt));
+	matrix::Vector3f raw_velocity(static_cast<float>(_target_info.vx), static_cast<float>(_target_info.vy),
+				      static_cast<float>(_target_info.vz));
+
+	if (!PX4_ISFINITE(raw_velocity(0)) || !PX4_ISFINITE(raw_velocity(1)) || !PX4_ISFINITE(raw_velocity(2))) {
+		raw_velocity.zero();
+	}
+
+	apply_target_filter(raw_position, raw_velocity, target_position, target_velocity);
 
 	float offset_x = _options.target_offset(0);
 	float offset_y = _options.target_offset(1);
@@ -216,12 +229,93 @@ bool CooperativeRendezvous::target_position_local(const vehicle_local_position_s
 		}
 	}
 
-	target_position(0) = x + offset_x;
-	target_position(1) = y + offset_y;
-	target_position(2) = (static_cast<float>(local_pos.ref_alt) - static_cast<float>(_target_info.alt)) +
-			     _options.target_offset(2) - _param_alt_diff.get();
+	target_position(0) += offset_x;
+	target_position(1) += offset_y;
+	target_position(2) += _options.target_offset(2) - _param_alt_diff.get();
 
 	return PX4_ISFINITE(target_position(2));
+}
+
+void CooperativeRendezvous::apply_target_filter(const matrix::Vector3f &raw_position,
+		const matrix::Vector3f &raw_velocity, matrix::Vector3f &target_position, matrix::Vector3f &target_velocity)
+{
+	const float position_tc = _param_target_position_tc.get();
+	const float velocity_tc = _param_target_velocity_tc.get();
+	const float max_position_jump = _param_target_position_jump.get();
+	const bool filter_enabled = (PX4_ISFINITE(position_tc) && position_tc > 0.f) ||
+				    (PX4_ISFINITE(velocity_tc) && velocity_tc > 0.f) ||
+				    (PX4_ISFINITE(max_position_jump) && max_position_jump > 0.f);
+
+	if (!filter_enabled) {
+		reset_target_filter();
+		target_position = raw_position;
+		target_velocity = raw_velocity;
+		return;
+	}
+
+	const hrt_abstime now = hrt_absolute_time();
+	const bool new_sample = _last_target_filter_sample_time != _last_target_time;
+
+	if (!_target_filter_initialized) {
+		_target_position_input = raw_position;
+		_target_position_filtered = raw_position;
+		_target_velocity_input = raw_velocity;
+		_target_velocity_filtered = raw_velocity;
+		_last_target_filter_time = now;
+		_last_target_filter_sample_time = _last_target_time;
+		_target_filter_initialized = true;
+	}
+
+	if (new_sample) {
+		matrix::Vector3f position_input = raw_position;
+
+		if (PX4_ISFINITE(max_position_jump) && max_position_jump > 0.f) {
+			const matrix::Vector3f delta = raw_position - _target_position_input;
+			const float delta_norm = delta.norm();
+			const float constrained_jump = math::constrain(max_position_jump, 0.1f, 200.f);
+
+			if (PX4_ISFINITE(delta_norm) && delta_norm > constrained_jump) {
+				position_input = _target_position_input + delta.normalized() * constrained_jump;
+			}
+		}
+
+		_target_position_input = position_input;
+		_target_velocity_input = raw_velocity;
+		_last_target_filter_sample_time = _last_target_time;
+	}
+
+	const float dt = math::constrain((now - _last_target_filter_time) * 1e-6f, 0.005f, 0.5f);
+
+	if (PX4_ISFINITE(position_tc) && position_tc > 0.f) {
+		const float alpha = dt / (math::constrain(position_tc, 0.02f, 10.f) + dt);
+		_target_position_filtered += (_target_position_input - _target_position_filtered) * alpha;
+
+	} else {
+		_target_position_filtered = _target_position_input;
+	}
+
+	if (PX4_ISFINITE(velocity_tc) && velocity_tc > 0.f) {
+		const float alpha = dt / (math::constrain(velocity_tc, 0.02f, 10.f) + dt);
+		_target_velocity_filtered += (_target_velocity_input - _target_velocity_filtered) * alpha;
+
+	} else {
+		_target_velocity_filtered = _target_velocity_input;
+	}
+
+	_last_target_filter_time = now;
+	target_position = _target_position_filtered;
+	target_velocity = _target_velocity_filtered;
+}
+
+void CooperativeRendezvous::reset_target_filter()
+{
+	_last_target_filter_time = 0;
+	_last_target_filter_sample_time = 0;
+	_target_filter_initialized = false;
+	_target_position_input.zero();
+	_target_position_filtered.zero();
+	_target_velocity_input.zero();
+	_target_velocity_filtered.zero();
 }
 
 void CooperativeRendezvous::publish_offboard_heartbeat(bool position_control, bool velocity_control)
@@ -371,8 +465,9 @@ void CooperativeRendezvous::keep_current_position_setpoint(const vehicle_local_p
 void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local_pos, const vehicle_status_s &status)
 {
 	matrix::Vector3f target_position{};
+	matrix::Vector3f target_velocity{};
 
-	if (!target_position_local(local_pos, target_position)) {
+	if (!target_state_local(local_pos, target_position, target_velocity)) {
 		const hrt_abstime now = hrt_absolute_time();
 
 		if (now - _last_status_log > 2_s) {
@@ -396,13 +491,6 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 	matrix::Vector3f current_position(local_pos.x, local_pos.y, local_pos.z);
 	matrix::Vector3f to_target = target_position - current_position;
 	const float distance = to_target.norm();
-	matrix::Vector3f target_velocity(static_cast<float>(_target_info.vx), static_cast<float>(_target_info.vy),
-					 static_cast<float>(_target_info.vz));
-
-	if (!PX4_ISFINITE(target_velocity(0)) || !PX4_ISFINITE(target_velocity(1)) || !PX4_ISFINITE(target_velocity(2))) {
-		target_velocity.zero();
-	}
-
 	matrix::Vector3f velocity_sp = target_velocity;
 	matrix::Vector2f horizontal_error(to_target(0), to_target(1));
 	const float horizontal_distance = horizontal_error.norm();
@@ -526,6 +614,7 @@ void CooperativeRendezvous::Run()
 	if (active_role() == Role::Rendezvous) {
 		if (!rendezvous_switch_enabled() || dyt_guidance_active()) {
 			reset_velocity_slew();
+			reset_target_filter();
 			return;
 		}
 
@@ -534,10 +623,12 @@ void CooperativeRendezvous::Run()
 	} else if (active_role() == Role::Broadcast && status.arming_state == vehicle_status_s::ARMING_STATE_ARMED &&
 		   rendezvous_switch_enabled() && !dyt_guidance_active()) {
 		reset_velocity_slew();
+		reset_target_filter();
 		keep_current_position_setpoint(local_pos);
 
 	} else {
 		reset_velocity_slew();
+		reset_target_filter();
 	}
 }
 
@@ -558,7 +649,7 @@ int CooperativeRendezvous::print_status()
 		break;
 	}
 
-	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) xy_en=%ld xy=(%.1f %.1f) dist=%.1f app_spd=%.1f slow=%.1f vslew=%.1f alt_diff=%.1f",
+	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) xy_en=%ld xy=(%.1f %.1f) dist=%.1f app_spd=%.1f slow=%.1f vslew=%.1f tpos_tc=%.2f tvel_tc=%.2f tpos_jmp=%.1f alt_diff=%.1f",
 		 _vehicle_id, role, _options.target_id,
 		 (double)_options.target_offset(0),
 		 (double)_options.target_offset(1),
@@ -570,6 +661,9 @@ int CooperativeRendezvous::print_status()
 		 (double)_param_app_speed.get(),
 		 (double)_param_slow_radius.get(),
 		 (double)_param_velocity_slew.get(),
+		 (double)_param_target_position_tc.get(),
+		 (double)_param_target_velocity_tc.get(),
+		 (double)_param_target_position_jump.get(),
 		 (double)_param_alt_diff.get());
 	PX4_INFO("activation aux=%d enabled=%d dyt_active=%d",
 		 static_cast<int>(_param_act_aux.get()), rendezvous_switch_enabled(), dyt_guidance_active());

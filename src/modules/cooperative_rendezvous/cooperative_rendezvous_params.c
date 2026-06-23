@@ -133,6 +133,57 @@ PARAM_DEFINE_FLOAT(CRDZ_SLOW_RAD, 5.f);
 PARAM_DEFINE_FLOAT(CRDZ_VSLEW, 0.f);
 
 /**
+ * Target position low-pass time constant
+ *
+ * Applies a first-order low-pass filter to the target aircraft local NED
+ * position before generating the rendezvous position and velocity setpoints.
+ * This helps reject telemetry jitter that would otherwise make the follower
+ * accelerate and decelerate repeatedly.
+ *
+ * Set to 0 to disable position filtering.
+ *
+ * @unit s
+ * @min 0
+ * @max 10
+ * @decimal 2
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_TPOS_TC, 0.f);
+
+/**
+ * Target velocity low-pass time constant
+ *
+ * Applies a first-order low-pass filter to the target aircraft NED velocity
+ * feed-forward before it is added to the rendezvous approach velocity.
+ *
+ * Set to 0 to disable velocity filtering.
+ *
+ * @unit s
+ * @min 0
+ * @max 10
+ * @decimal 2
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_TVEL_TC, 0.f);
+
+/**
+ * Target position jump limit
+ *
+ * Limits one accepted target-position measurement jump before the low-pass
+ * filter. This is useful when the target telemetry occasionally reports a
+ * bad GPS/global position sample.
+ *
+ * Set to 0 to disable jump limiting.
+ *
+ * @unit m
+ * @min 0
+ * @max 200
+ * @decimal 1
+ * @group Cooperative Rendezvous
+ */
+PARAM_DEFINE_FLOAT(CRDZ_TPOS_JMP, 0.f);
+
+/**
  * Altitude difference from target
  *
  * Desired altitude difference for the rendezvous aircraft relative to the
