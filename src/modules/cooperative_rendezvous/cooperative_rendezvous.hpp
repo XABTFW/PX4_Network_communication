@@ -40,6 +40,7 @@ public:
 		bool auto_arm{false};
 		bool auto_offboard{true};
 		bool relax_failsafes{false};
+		bool direct_target{false};
 	};
 
 	CooperativeRendezvous(const Options &options);
@@ -99,6 +100,9 @@ private:
 	hrt_abstime _last_target_filter_sample_time{0};
 	bool _failsafes_configured{false};
 	bool _target_filter_initialized{false};
+	bool _offboard_was_active{false};
+	bool _offboard_active_previous{false};
+	bool _offboard_user_released{false};
 	matrix::Vector2f _last_velocity_sp_xy{};
 	matrix::Vector3f _target_position_input{};
 	matrix::Vector3f _target_position_filtered{};

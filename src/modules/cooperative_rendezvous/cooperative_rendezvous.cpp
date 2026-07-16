@@ -201,6 +201,10 @@ bool CooperativeRendezvous::target_state_local(const vehicle_local_position_s &l
 
 	apply_target_filter(raw_position, raw_velocity, target_position, target_velocity);
 
+	if (_options.direct_target) {
+		return PX4_ISFINITE(target_position(2));
+	}
+
 	float offset_x = _options.target_offset(0);
 	float offset_y = _options.target_offset(1);
 
@@ -517,10 +521,11 @@ void CooperativeRendezvous::run_rendezvous(const vehicle_local_position_s &local
 
 	request_arm(status);
 
-	if (status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION &&
-	    status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER &&
-	    status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_RTL &&
-	    status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_LAND) {
+	if (_options.direct_target ||
+	    (status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_MISSION &&
+	     status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_LOITER &&
+	     status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_RTL &&
+	     status.nav_state != vehicle_status_s::NAVIGATION_STATE_AUTO_LAND)) {
 		request_offboard(status);
 	}
 
@@ -601,6 +606,23 @@ void CooperativeRendezvous::Run()
 	_manual_control_sub.update(&_manual_control);
 	_dyt_guidance_status_sub.update(&_dyt_guidance_status);
 
+	const bool offboard_active = status.nav_state == vehicle_status_s::NAVIGATION_STATE_OFFBOARD;
+
+	if (offboard_active && !_offboard_active_previous) {
+		_offboard_was_active = true;
+		_offboard_user_released = false;
+		reset_velocity_slew();
+
+	} else if (!offboard_active && _offboard_active_previous) {
+		// A mode change after entering Offboard is treated as an explicit pilot release.
+		// Stop publishing setpoints and requesting Offboard until the pilot selects it again.
+		_offboard_user_released = true;
+		reset_velocity_slew();
+		reset_target_filter();
+	}
+
+	_offboard_active_previous = offboard_active;
+
 	if (local_position_valid(local_pos)) {
 		publish_own_position(local_pos);
 	}
@@ -613,6 +635,15 @@ void CooperativeRendezvous::Run()
 
 	if (active_role() == Role::Rendezvous) {
 		if (!rendezvous_switch_enabled() || dyt_guidance_active()) {
+			reset_velocity_slew();
+			reset_target_filter();
+			_offboard_was_active = false;
+			_offboard_active_previous = offboard_active;
+			_offboard_user_released = false;
+			return;
+		}
+
+		if (_offboard_user_released && !offboard_active) {
 			reset_velocity_slew();
 			reset_target_filter();
 			return;
@@ -649,8 +680,9 @@ int CooperativeRendezvous::print_status()
 		break;
 	}
 
-	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " offset=(%.1f %.1f %.1f) xy_en=%ld xy=(%.1f %.1f) dist=%.1f app_spd=%.1f slow=%.1f vslew=%.1f tpos_tc=%.2f tvel_tc=%.2f tpos_jmp=%.1f alt_diff=%.1f",
+	PX4_INFO("running: vehicle=%" PRIu32 " role=%s target=%" PRIu32 " direct=%d offset=(%.1f %.1f %.1f) xy_en=%ld xy=(%.1f %.1f) dist=%.1f app_spd=%.1f slow=%.1f vslew=%.1f tpos_tc=%.2f tvel_tc=%.2f tpos_jmp=%.1f alt_diff=%.1f",
 		 _vehicle_id, role, _options.target_id,
+		 static_cast<int>(_options.direct_target),
 		 (double)_options.target_offset(0),
 		 (double)_options.target_offset(1),
 		 (double)_options.target_offset(2),
@@ -665,8 +697,9 @@ int CooperativeRendezvous::print_status()
 		 (double)_param_target_velocity_tc.get(),
 		 (double)_param_target_position_jump.get(),
 		 (double)_param_alt_diff.get());
-	PX4_INFO("activation aux=%d enabled=%d dyt_active=%d",
-		 static_cast<int>(_param_act_aux.get()), rendezvous_switch_enabled(), dyt_guidance_active());
+	PX4_INFO("activation aux=%d enabled=%d dyt_active=%d user_released=%d",
+		 static_cast<int>(_param_act_aux.get()), rendezvous_switch_enabled(), dyt_guidance_active(),
+		 static_cast<int>(_offboard_user_released));
 	PX4_INFO("activation button=%d buttons=0x%04x",
 		 static_cast<int>(_param_act_btn.get()), static_cast<unsigned>(_manual_control.buttons));
 	return 0;
@@ -702,7 +735,7 @@ int CooperativeRendezvous::task_spawn(int argc, char *argv[])
 	int ch;
 	const char *myoptarg = nullptr;
 
-	while ((ch = px4_getopt(argc, argv, "r:t:d:x:y:z:v:T:AFh", &myoptind, &myoptarg)) != EOF) {
+	while ((ch = px4_getopt(argc, argv, "r:t:d:x:y:z:v:T:AGFh", &myoptind, &myoptarg)) != EOF) {
 		switch (ch) {
 		case 'r':
 			if (!parse_role(myoptarg, options.role)) {
@@ -747,6 +780,11 @@ int CooperativeRendezvous::task_spawn(int argc, char *argv[])
 
 		case 'F':
 			options.relax_failsafes = true;
+			break;
+
+		case 'G':
+			options.direct_target = true;
+			options.target_offset.zero();
 			break;
 
 		case 'h':
@@ -796,7 +834,8 @@ int CooperativeRendezvous::print_usage(const char *reason)
 Two-aircraft cooperative rendezvous module.
 
 MAV_SYS_ID=1 broadcasts its local position converted to WGS84.
-MAV_SYS_ID=2 flies to a configurable offset near aircraft 1.
+MAV_SYS_ID=2 flies to a configurable offset near aircraft 1, or directly to
+an incoming radar target position when -G is enabled.
 )DESCR_STR");
 
 	PRINT_MODULE_USAGE_NAME("cooperative_rendezvous", "controller");
@@ -810,6 +849,7 @@ MAV_SYS_ID=2 flies to a configurable offset near aircraft 1.
 	PRINT_MODULE_USAGE_PARAM_FLOAT('v', 3.f, 0.5f, 50.f, "Maximum approach speed", true);
 	PRINT_MODULE_USAGE_PARAM_FLOAT('T', 2.f, 0.5f, 10.f, "Target timeout", true);
 	PRINT_MODULE_USAGE_PARAM_FLAG('A', "Auto arm rendezvous aircraft", true);
+	PRINT_MODULE_USAGE_PARAM_FLAG('G', "Go directly to target position without offset/distance", true);
 	PRINT_MODULE_USAGE_PARAM_FLAG('F', "Relax link/manual/offboard failsafes for simulation", true);
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 

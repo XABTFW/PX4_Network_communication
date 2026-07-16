@@ -1,0 +1,6 @@
+menuconfig MODULES_TARGET_FRAME_UDP
+	bool "target_frame_udp"
+	default n
+	depends on BOARD_ETHERNET
+	---help---
+		Bidirectional UDP transport for the custom radar target-frame protocol.
