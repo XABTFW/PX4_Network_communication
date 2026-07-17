@@ -2,6 +2,7 @@
 
 #include "target_frame_codec.hpp"
 
+#include <px4_platform_common/atomic.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
 #include <uORB/Publication.hpp>
@@ -43,8 +44,14 @@ private:
 	void close_socket();
 	void update_ownship();
 	void send_ownship(hrt_abstime now);
+	bool send_targets(const target_frame_udp::Target *targets, size_t target_count, bool force_dump);
+	bool send_raw_frame(const uint8_t *buffer, size_t length, bool force_dump);
 	void receive_frames();
 	void publish_target(const target_frame_udp::Target &target);
+	void dump_frame(const char *direction, const uint8_t *buffer, size_t length) const;
+	void dump_target(const char *direction, const target_frame_udp::Target &target) const;
+	bool command_send_decimal(int argc, char *argv[]);
+	bool command_send_hex(int argc, char *argv[]);
 	bool ownship_valid(hrt_abstime now) const;
 	static bool parse_crc_mode(const char *name, target_frame_udp::CrcMode &mode);
 	static const char *crc_mode_name(target_frame_udp::CrcMode mode);
@@ -54,7 +61,9 @@ private:
 	int _socket_fd{-1};
 	struct sockaddr_in _peer_address {};
 	uint32_t _vehicle_id{0};
-	uint8_t _tx_sequence{0};
+	px4::atomic<uint8_t> _tx_sequence{0};
+	px4::atomic<bool> _dump_enabled{false};
+	px4::atomic<bool> _auto_send_enabled{true};
 	uint8_t _last_rx_sequence{0};
 	bool _rx_sequence_initialized{false};
 	hrt_abstime _last_tx_time{0};

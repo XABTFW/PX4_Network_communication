@@ -14,9 +14,53 @@
 #include <inttypes.h>
 #include <initializer_list>
 #include <limits>
+#include <stdio.h>
 #include <unistd.h>
 
 using target_frame_udp::CrcMode;
+
+namespace
+{
+
+int hex_nibble(char value)
+{
+	if (value >= '0' && value <= '9') { return value - '0'; }
+	if (value >= 'a' && value <= 'f') { return value - 'a' + 10; }
+	if (value >= 'A' && value <= 'F') { return value - 'A' + 10; }
+	return -1;
+}
+
+bool parse_double_value(const char *text, double &value)
+{
+	char *end = nullptr;
+	errno = 0;
+	value = strtod(text, &end);
+	return errno == 0 && end != text && *end == '\0' && std::isfinite(value);
+}
+
+bool parse_float_value(const char *text, float &value)
+{
+	char *end = nullptr;
+	errno = 0;
+	value = strtof(text, &end);
+	return errno == 0 && end != text && *end == '\0' && PX4_ISFINITE(value);
+}
+
+bool parse_target_id(const char *text, uint16_t &value)
+{
+	char *end = nullptr;
+	errno = 0;
+	const unsigned long parsed = strtoul(text, &end, 0);
+
+	if (errno != 0 || end == text || *end != '\0' || parsed == 0 || parsed > UINT16_MAX) {
+		return false;
+	}
+
+	value = static_cast<uint16_t>(parsed);
+	return true;
+}
+
+} // namespace
 
 TargetFrameUdp::TargetFrameUdp(const Options &options) :
 	ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::lp_default),
@@ -119,7 +163,7 @@ bool TargetFrameUdp::ownship_valid(hrt_abstime now) const
 
 void TargetFrameUdp::send_ownship(hrt_abstime now)
 {
-	if (_socket_fd < 0 || (now - _last_tx_time) < _tx_interval || !ownship_valid(now)) {
+	if (!_auto_send_enabled.load() || _socket_fd < 0 || (now - _last_tx_time) < _tx_interval || !ownship_valid(now)) {
 		return;
 	}
 
@@ -145,25 +189,93 @@ void TargetFrameUdp::send_ownship(hrt_abstime now)
 					target.vz_m_s * target.vz_m_s);
 	}
 
+	send_targets(&target, 1, false);
+}
+
+bool TargetFrameUdp::send_targets(const target_frame_udp::Target *targets, size_t target_count, bool force_dump)
+{
 	uint8_t buffer[target_frame_udp::MAX_DATAGRAM_SIZE] {};
 	size_t encoded_length = 0;
+	const uint8_t sequence = _tx_sequence.fetch_add(1);
 
-	if (!target_frame_udp::encode(&target, 1, _tx_sequence++, static_cast<uint32_t>(now / 1000),
+	if (!target_frame_udp::encode(targets, target_count, sequence, static_cast<uint32_t>(hrt_absolute_time() / 1000),
 				      _options.crc_mode, buffer, sizeof(buffer), encoded_length)) {
 		++_socket_errors;
-		return;
+		return false;
 	}
 
-	const ssize_t sent = sendto(_socket_fd, buffer, encoded_length, 0,
+	if (force_dump || _dump_enabled.load()) {
+		dump_frame("TX", buffer, encoded_length);
+
+		for (size_t i = 0; i < target_count; ++i) {
+			dump_target("TX", targets[i]);
+		}
+	}
+
+	return send_raw_frame(buffer, encoded_length, false);
+}
+
+bool TargetFrameUdp::send_raw_frame(const uint8_t *buffer, size_t length, bool force_dump)
+{
+	if (_socket_fd < 0 || buffer == nullptr || length == 0) {
+		return false;
+	}
+
+	if (force_dump) {
+		dump_frame("TX", buffer, length);
+	}
+
+	const ssize_t sent = sendto(_socket_fd, buffer, length, 0,
 				    reinterpret_cast<const struct sockaddr *>(&_peer_address), sizeof(_peer_address));
 
-	if (sent == static_cast<ssize_t>(encoded_length)) {
+	if (sent == static_cast<ssize_t>(length)) {
 		++_tx_packets;
+		return true;
 
 	} else {
 		++_socket_errors;
 		PX4_WARN("UDP send failed: %s", sent < 0 ? strerror(errno) : "short write");
+		return false;
 	}
+}
+
+void TargetFrameUdp::dump_frame(const char *direction, const uint8_t *buffer, size_t length) const
+{
+	static constexpr size_t bytes_per_line = 16;
+	PX4_INFO("%s HEX len=%u", direction, static_cast<unsigned>(length));
+
+	for (size_t offset = 0; offset < length; offset += bytes_per_line) {
+		char text[bytes_per_line * 3 + 1] {};
+		size_t text_index = 0;
+		const size_t line_end = math::min(offset + bytes_per_line, length);
+
+		for (size_t i = offset; i < line_end; ++i) {
+			const int written = snprintf(&text[text_index], sizeof(text) - text_index, "%02X%s", buffer[i],
+						     i + 1 < line_end ? " " : "");
+
+			if (written <= 0) {
+				break;
+			}
+
+			text_index += static_cast<size_t>(written);
+		}
+
+		PX4_INFO("%s HEX +%03u: %s", direction, static_cast<unsigned>(offset), text);
+	}
+}
+
+void TargetFrameUdp::dump_target(const char *direction, const target_frame_udp::Target &target) const
+{
+	PX4_INFO("%s DEC id=%u lon=%.7f lat=%.7f alt=%.3f speed=%.3f", direction,
+		 static_cast<unsigned>(target.target_id),
+		 static_cast<double>(target.longitude_e7) * 1e-7,
+		 static_cast<double>(target.latitude_e7) * 1e-7,
+		 static_cast<double>(target.altitude_m), static_cast<double>(target.speed_m_s));
+	PX4_INFO("%s DEC vx=%.3f vy=%.3f vz=%.3f del=%u type=0x%02x attr=0x%02x",
+		 direction,
+		 static_cast<double>(target.vx_m_s), static_cast<double>(target.vy_m_s),
+		 static_cast<double>(target.vz_m_s), static_cast<unsigned>(target.delete_flag),
+		 static_cast<unsigned>(target.track_type), static_cast<unsigned>(target.target_attribute));
 }
 
 void TargetFrameUdp::publish_target(const target_frame_udp::Target &target)
@@ -225,6 +337,10 @@ void TargetFrameUdp::receive_frames()
 			continue;
 		}
 
+		if (_dump_enabled.load()) {
+			dump_frame("RX", buffer, static_cast<size_t>(received));
+		}
+
 		target_frame_udp::Target targets[target_frame_udp::MAX_TARGETS] {};
 		target_frame_udp::FrameInfo frame_info{};
 		const auto result = target_frame_udp::decode(buffer, static_cast<size_t>(received), _options.crc_mode,
@@ -250,6 +366,10 @@ void TargetFrameUdp::receive_frames()
 		_rx_sequence_initialized = true;
 
 		for (size_t i = 0; i < frame_info.target_count; ++i) {
+			if (_dump_enabled.load()) {
+				dump_target("RX", targets[i]);
+			}
+
 			publish_target(targets[i]);
 		}
 	}
@@ -289,6 +409,132 @@ const char *TargetFrameUdp::crc_mode_name(CrcMode mode)
 	}
 
 	return "unknown";
+}
+
+bool TargetFrameUdp::command_send_decimal(int argc, char *argv[])
+{
+	if (argc != 8) {
+		PX4_ERR("usage: target_frame_udp senddec <id> <lon> <lat> <alt> <vx> <vy> <vz>");
+		return false;
+	}
+
+	target_frame_udp::Target target{};
+	double longitude = 0.0;
+	double latitude = 0.0;
+	float altitude = 0.f;
+
+	if (!parse_target_id(argv[1], target.target_id) ||
+	    !parse_double_value(argv[2], longitude) || longitude < -180.0 || longitude > 180.0 ||
+	    !parse_double_value(argv[3], latitude) || latitude < -90.0 || latitude > 90.0 ||
+	    !parse_float_value(argv[4], altitude) ||
+	    !parse_float_value(argv[5], target.vx_m_s) ||
+	    !parse_float_value(argv[6], target.vy_m_s) ||
+	    !parse_float_value(argv[7], target.vz_m_s)) {
+		PX4_ERR("invalid senddec value");
+		return false;
+	}
+
+	const double altitude_mm = static_cast<double>(altitude) * 1000.0;
+
+	if (altitude_mm < static_cast<double>(INT32_MIN) || altitude_mm > static_cast<double>(INT32_MAX)) {
+		PX4_ERR("altitude outside int32 millimetre range");
+		return false;
+	}
+
+	target.longitude_e7 = static_cast<int32_t>(llround(longitude * 1e7));
+	target.latitude_e7 = static_cast<int32_t>(llround(latitude * 1e7));
+	target.altitude_mm = static_cast<int32_t>(llround(altitude_mm));
+	target.altitude_m = altitude;
+	target.speed_m_s = sqrtf(target.vx_m_s * target.vx_m_s + target.vy_m_s * target.vy_m_s +
+				target.vz_m_s * target.vz_m_s);
+	target.track_type = _options.track_type;
+	target.target_attribute = _options.target_attribute;
+
+	if (!send_targets(&target, 1, true)) {
+		PX4_ERR("senddec failed");
+		return false;
+	}
+
+	PX4_INFO("senddec sent 67-byte target frame");
+	return true;
+}
+
+bool TargetFrameUdp::command_send_hex(int argc, char *argv[])
+{
+	if (argc < 2) {
+		PX4_ERR("usage: target_frame_udp sendhex <hex bytes>");
+		return false;
+	}
+
+	uint8_t buffer[target_frame_udp::MAX_DATAGRAM_SIZE] {};
+	size_t length = 0;
+	int high_nibble = -1;
+
+	for (int argument = 1; argument < argc; ++argument) {
+		const char *text = argv[argument];
+
+		for (size_t index = 0; text[index] != '\0'; ++index) {
+			const char value = text[index];
+
+			if ((value == '0') && (text[index + 1] == 'x' || text[index + 1] == 'X') && high_nibble < 0) {
+				++index;
+				continue;
+			}
+
+			if (value == ':' || value == '-' || value == '_' || value == ',') {
+				continue;
+			}
+
+			const int nibble = hex_nibble(value);
+
+			if (nibble < 0) {
+				PX4_ERR("invalid hex character: %c", value);
+				return false;
+			}
+
+			if (high_nibble < 0) {
+				high_nibble = nibble;
+
+			} else {
+				if (length >= sizeof(buffer)) {
+					PX4_ERR("hex frame exceeds %u bytes", static_cast<unsigned>(sizeof(buffer)));
+					return false;
+				}
+
+				buffer[length++] = static_cast<uint8_t>((high_nibble << 4) | nibble);
+				high_nibble = -1;
+			}
+		}
+	}
+
+	if (high_nibble >= 0 || length == 0) {
+		PX4_ERR("hex input must contain complete bytes");
+		return false;
+	}
+
+	target_frame_udp::Target targets[target_frame_udp::MAX_TARGETS] {};
+	target_frame_udp::FrameInfo frame_info{};
+	const auto result = target_frame_udp::decode(buffer, length, _options.crc_mode,
+			    targets, target_frame_udp::MAX_TARGETS, frame_info);
+
+	if (result != target_frame_udp::DecodeResult::Ok) {
+		PX4_ERR("sendhex rejected: %s", target_frame_udp::decode_result_string(result));
+		return false;
+	}
+
+	for (size_t i = 0; i < frame_info.target_count; ++i) {
+		dump_target("HEX", targets[i]);
+	}
+
+	if (!send_raw_frame(buffer, length, true)) {
+		PX4_ERR("sendhex failed");
+		return false;
+	}
+
+	_tx_sequence.store(static_cast<uint8_t>(frame_info.sequence + 1));
+	PX4_INFO("sendhex sent %u-byte frame with %u target(s)", static_cast<unsigned>(length),
+		 static_cast<unsigned>(frame_info.target_count));
+	return true;
 }
 
 bool TargetFrameUdp::codec_self_test()
@@ -435,14 +681,57 @@ int TargetFrameUdp::custom_command(int argc, char *argv[])
 		return passed ? PX4_OK : PX4_ERROR;
 	}
 
+	if (!is_running()) {
+		return print_usage("target_frame_udp not running");
+	}
+
+	TargetFrameUdp *instance = get_instance();
+
+	if (argc == 2 && strcmp(argv[0], "dump") == 0) {
+		if (strcmp(argv[1], "on") == 0) {
+			instance->_dump_enabled.store(true);
+			PX4_INFO("frame dump enabled");
+			return PX4_OK;
+		}
+
+		if (strcmp(argv[1], "off") == 0) {
+			instance->_dump_enabled.store(false);
+			PX4_INFO("frame dump disabled");
+			return PX4_OK;
+		}
+	}
+
+	if (argc == 2 && strcmp(argv[0], "auto") == 0) {
+		if (strcmp(argv[1], "on") == 0) {
+			instance->_auto_send_enabled.store(true);
+			PX4_INFO("automatic ownship transmission enabled");
+			return PX4_OK;
+		}
+
+		if (strcmp(argv[1], "off") == 0) {
+			instance->_auto_send_enabled.store(false);
+			PX4_INFO("automatic ownship transmission disabled");
+			return PX4_OK;
+		}
+	}
+
+	if (argc > 0 && strcmp(argv[0], "senddec") == 0) {
+		return instance->command_send_decimal(argc, argv) ? PX4_OK : PX4_ERROR;
+	}
+
+	if (argc > 0 && strcmp(argv[0], "sendhex") == 0) {
+		return instance->command_send_hex(argc, argv) ? PX4_OK : PX4_ERROR;
+	}
+
 	return print_usage("unknown command");
 }
 
 int TargetFrameUdp::print_status()
 {
-	PX4_INFO("peer=%s:%u local=%u rate=%.1fHz crc=%s sysid=%" PRIu32,
+	PX4_INFO("peer=%s:%u local=%u rate=%.1fHz crc=%s sysid=%" PRIu32 " auto=%d dump=%d",
 		 _options.peer_ip, static_cast<unsigned>(_options.remote_port), static_cast<unsigned>(_options.local_port),
-		 static_cast<double>(_options.rate_hz), crc_mode_name(_options.crc_mode), _vehicle_id);
+		 static_cast<double>(_options.rate_hz), crc_mode_name(_options.crc_mode), _vehicle_id,
+		 static_cast<int>(_auto_send_enabled.load()), static_cast<int>(_dump_enabled.load()));
 	PX4_INFO("tx=%" PRIu64 " rx=%" PRIu64 " targets=%" PRIu64 " dropped=%" PRIu64
 		 " sequence_errors=%" PRIu64 " socket_errors=%" PRIu64,
 		 _tx_packets, _rx_packets, _rx_targets, _rx_dropped, _rx_sequence_errors, _socket_errors);
@@ -470,6 +759,11 @@ a CRC-16 profile; MODBUS is only the temporary default.
 	PRINT_MODULE_USAGE_PARAM_INT('y', 0x20, 0, 255, "Track type", true);
 	PRINT_MODULE_USAGE_PARAM_INT('a', 0x22, 0, 255, "Target attribute", true);
 	PRINT_MODULE_USAGE_COMMAND_DESCR("test", "Run protocol codec self-test");
+	PX4_INFO_RAW("     dump on|off                         Print live TX/RX HEX and decoded decimal data\n");
+	PX4_INFO_RAW("     auto on|off                         Enable or pause automatic ownship frames\n");
+	PX4_INFO_RAW("     senddec <id> <lon> <lat> <alt> <vx> <vy> <vz>\n");
+	PX4_INFO_RAW("                                         Encode decimal values and send one frame\n");
+	PX4_INFO_RAW("     sendhex <FD10...CRC>                 Validate and send one raw HEX frame\n");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 	return PX4_OK;
 }

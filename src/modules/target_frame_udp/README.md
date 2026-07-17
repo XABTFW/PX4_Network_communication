@@ -52,6 +52,49 @@ listener follower_info
 listener vehicle_global_position
 ```
 
+## Manual decimal/hexadecimal test
+
+Pause the periodic ownship frames before a manual test so that their output is
+not mixed with the test frame. Enable live dumps on both computers:
+
+```sh
+target_frame_udp auto off
+target_frame_udp dump on
+```
+
+Send decimal target fields from either PX4 shell. Longitude and latitude are in
+degrees, altitude is in metres, and `vx/vy/vz` are NED velocities in m/s
+(positive `vz` is down):
+
+```sh
+target_frame_udp senddec 100 8.5462000 47.3980000 20.5 1.0 2.0 -0.5
+```
+
+The sender prints the encoded packet as offset-labelled `TX HEX` lines (16 bytes
+per line) and its decimal fields as `TX DEC`. Concatenate the byte groups in
+offset order to obtain the complete frame. The peer prints the same packet as
+`RX HEX`, followed by `RX DEC`, and publishes it to `follower_info` when the
+target ID differs from its own `MAV_SYS_ID`.
+
+To send hexadecimal input, provide one complete protocol packet, including its
+two CRC bytes. The packet must match the CRC mode selected by `-c`. Spaces,
+colons and a contiguous hexadecimal string are accepted:
+
+```sh
+target_frame_udp sendhex FD 10 ... <CRC-low> <CRC-high>
+target_frame_udp sendhex FD10...<CRC-low><CRC-high>
+```
+
+An easy way to obtain a valid packet is to copy the `TX HEX` output produced by
+`senddec` and submit those bytes to `sendhex`. The module validates and decodes
+the packet locally before transmission. Restore normal periodic transmission
+after testing:
+
+```sh
+target_frame_udp dump off
+target_frame_udp auto on
+```
+
 Host-side packet capture:
 
 ```sh
