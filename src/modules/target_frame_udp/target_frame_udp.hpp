@@ -47,6 +47,7 @@ private:
 	bool send_targets(const target_frame_udp::Target *targets, size_t target_count, bool force_dump);
 	bool send_raw_frame(const uint8_t *buffer, size_t length, bool force_dump);
 	void receive_frames();
+	void encode_follower_info();
 	void publish_target(const target_frame_udp::Target &target);
 	void dump_frame(const char *direction, const uint8_t *buffer, size_t length) const;
 	void dump_target(const char *direction, const target_frame_udp::Target &target) const;
@@ -64,6 +65,7 @@ private:
 	px4::atomic<uint8_t> _tx_sequence{0};
 	px4::atomic<bool> _dump_enabled{false};
 	px4::atomic<bool> _auto_send_enabled{true};
+	px4::atomic<bool> _follower_dump_enabled{false};
 	uint8_t _last_rx_sequence{0};
 	bool _rx_sequence_initialized{false};
 	hrt_abstime _last_tx_time{0};
@@ -78,8 +80,10 @@ private:
 	uint64_t _rx_dropped{0};
 	uint64_t _rx_sequence_errors{0};
 	uint64_t _socket_errors{0};
+	uint64_t _follower_frames{0};
 
 	uORB::Subscription _global_position_sub{ORB_ID(vehicle_global_position)};
 	uORB::Subscription _local_position_sub{ORB_ID(vehicle_local_position)};
+	uORB::Subscription _follower_info_sub{ORB_ID(follower_info)};
 	uORB::Publication<follower_info_s> _follower_info_pub{ORB_ID(follower_info)};
 };

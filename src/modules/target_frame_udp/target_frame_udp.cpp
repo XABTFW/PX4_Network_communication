@@ -375,6 +375,55 @@ void TargetFrameUdp::receive_frames()
 	}
 }
 
+void TargetFrameUdp::encode_follower_info()
+{
+	// Take target data delivered through MAVLink (UAV_INFO -> follower_info),
+	// encode it into the radar/display protocol frame and print HEX + decimal.
+	// This makes the "GCS -> MAVLink -> PX4 -> protocol HEX" path observable.
+	if (!_follower_dump_enabled.load()) {
+		return;
+	}
+
+	follower_info_s info{};
+
+	while (_follower_info_sub.update(&info)) {
+		if (info.mavid == 0 || info.mavid == _vehicle_id || !PX4_ISFINITE(info.lat) ||
+		    !PX4_ISFINITE(info.lon) || !PX4_ISFINITE(info.alt) ||
+		    info.lat < -90.0 || info.lat > 90.0 || info.lon < -180.0 || info.lon > 180.0) {
+			continue;
+		}
+
+		target_frame_udp::Target target{};
+		target.target_id = static_cast<uint16_t>(info.mavid);
+		target.longitude_e7 = static_cast<int32_t>(llround(info.lon * 1e7));
+		target.latitude_e7 = static_cast<int32_t>(llround(info.lat * 1e7));
+
+		const double altitude_mm = info.alt * 1000.0;
+		target.altitude_mm = static_cast<int32_t>(llround(fmax(static_cast<double>(INT32_MIN),
+				     fmin(static_cast<double>(INT32_MAX), altitude_mm))));
+		target.altitude_m = static_cast<float>(info.alt);
+		target.vx_m_s = static_cast<float>(info.vx);
+		target.vy_m_s = static_cast<float>(info.vy);
+		target.vz_m_s = static_cast<float>(info.vz);
+		target.speed_m_s = sqrtf(target.vx_m_s * target.vx_m_s + target.vy_m_s * target.vy_m_s +
+					 target.vz_m_s * target.vz_m_s);
+		target.track_type = _options.track_type;
+		target.target_attribute = _options.target_attribute;
+
+		uint8_t buffer[target_frame_udp::MAX_DATAGRAM_SIZE] {};
+		size_t encoded_length = 0;
+		const uint8_t sequence = _tx_sequence.fetch_add(1);
+
+		if (target_frame_udp::encode(&target, 1, sequence,
+					     static_cast<uint32_t>(hrt_absolute_time() / 1000),
+					     _options.crc_mode, buffer, sizeof(buffer), encoded_length)) {
+			dump_frame("MAV", buffer, encoded_length);
+			dump_target("MAV", target);
+			++_follower_frames;
+		}
+	}
+}
+
 void TargetFrameUdp::Run()
 {
 	if (should_exit()) {
@@ -385,6 +434,7 @@ void TargetFrameUdp::Run()
 	}
 	update_ownship();
 	receive_frames();
+	encode_follower_info();
 	send_ownship(hrt_absolute_time());
 }
 
@@ -701,6 +751,20 @@ int TargetFrameUdp::custom_command(int argc, char *argv[])
 		}
 	}
 
+	if (argc == 2 && strcmp(argv[0], "mavdump") == 0) {
+		if (strcmp(argv[1], "on") == 0) {
+			instance->_follower_dump_enabled.store(true);
+			PX4_INFO("follower_info -> protocol HEX dump enabled");
+			return PX4_OK;
+		}
+
+		if (strcmp(argv[1], "off") == 0) {
+			instance->_follower_dump_enabled.store(false);
+			PX4_INFO("follower_info -> protocol HEX dump disabled");
+			return PX4_OK;
+		}
+	}
+
 	if (argc == 2 && strcmp(argv[0], "auto") == 0) {
 		if (strcmp(argv[1], "on") == 0) {
 			instance->_auto_send_enabled.store(true);
@@ -728,13 +792,15 @@ int TargetFrameUdp::custom_command(int argc, char *argv[])
 
 int TargetFrameUdp::print_status()
 {
-	PX4_INFO("peer=%s:%u local=%u rate=%.1fHz crc=%s sysid=%" PRIu32 " auto=%d dump=%d",
+	PX4_INFO("peer=%s:%u local=%u rate=%.1fHz crc=%s sysid=%" PRIu32 " auto=%d dump=%d mavdump=%d",
 		 _options.peer_ip, static_cast<unsigned>(_options.remote_port), static_cast<unsigned>(_options.local_port),
 		 static_cast<double>(_options.rate_hz), crc_mode_name(_options.crc_mode), _vehicle_id,
-		 static_cast<int>(_auto_send_enabled.load()), static_cast<int>(_dump_enabled.load()));
+		 static_cast<int>(_auto_send_enabled.load()), static_cast<int>(_dump_enabled.load()),
+		 static_cast<int>(_follower_dump_enabled.load()));
 	PX4_INFO("tx=%" PRIu64 " rx=%" PRIu64 " targets=%" PRIu64 " dropped=%" PRIu64
-		 " sequence_errors=%" PRIu64 " socket_errors=%" PRIu64,
-		 _tx_packets, _rx_packets, _rx_targets, _rx_dropped, _rx_sequence_errors, _socket_errors);
+		 " sequence_errors=%" PRIu64 " socket_errors=%" PRIu64 " mav_frames=%" PRIu64,
+		 _tx_packets, _rx_packets, _rx_targets, _rx_dropped, _rx_sequence_errors, _socket_errors,
+		 _follower_frames);
 	return PX4_OK;
 }
 
@@ -760,6 +826,7 @@ a CRC-16 profile; MODBUS is only the temporary default.
 	PRINT_MODULE_USAGE_PARAM_INT('a', 0x22, 0, 255, "Target attribute", true);
 	PRINT_MODULE_USAGE_COMMAND_DESCR("test", "Run protocol codec self-test");
 	PX4_INFO_RAW("     dump on|off                         Print live TX/RX HEX and decoded decimal data\n");
+	PX4_INFO_RAW("     mavdump on|off                      Encode follower_info (from MAVLink UAV_INFO) to protocol HEX and print\n");
 	PX4_INFO_RAW("     auto on|off                         Enable or pause automatic ownship frames\n");
 	PX4_INFO_RAW("     senddec <id> <lon> <lat> <alt> <vx> <vy> <vz>\n");
 	PX4_INFO_RAW("                                         Encode decimal values and send one frame\n");
