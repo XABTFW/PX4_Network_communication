@@ -198,7 +198,7 @@ bool TargetFrameUdp::send_targets(const target_frame_udp::Target *targets, size_
 	size_t encoded_length = 0;
 	const uint8_t sequence = _tx_sequence.fetch_add(1);
 
-	if (!target_frame_udp::encode(targets, target_count, sequence, static_cast<uint32_t>(hrt_absolute_time() / 1000),
+	if (!target_frame_udp::encode(targets, target_count, sequence, static_cast<uint64_t>(hrt_absolute_time() / 1000),
 				      _options.crc_mode, buffer, sizeof(buffer), encoded_length)) {
 		++_socket_errors;
 		return false;
@@ -415,7 +415,7 @@ void TargetFrameUdp::encode_follower_info()
 		const uint8_t sequence = _tx_sequence.fetch_add(1);
 
 		if (target_frame_udp::encode(&target, 1, sequence,
-					     static_cast<uint32_t>(hrt_absolute_time() / 1000),
+					     static_cast<uint64_t>(hrt_absolute_time() / 1000),
 					     _options.crc_mode, buffer, sizeof(buffer), encoded_length)) {
 			dump_frame("MAV", buffer, encoded_length);
 			dump_target("MAV", target);
@@ -505,7 +505,7 @@ bool TargetFrameUdp::command_send_decimal(int argc, char *argv[])
 		return false;
 	}
 
-	PX4_INFO("senddec sent 67-byte target frame");
+	PX4_INFO("senddec sent 71-byte target frame");
 	return true;
 }
 
@@ -613,7 +613,7 @@ bool TargetFrameUdp::codec_self_test()
 
 	for (CrcMode mode : {CrcMode::None, CrcMode::Modbus, CrcMode::CcittFalse, CrcMode::X25}) {
 		if (!target_frame_udp::encode(&input, 1, 254, 123456, mode, buffer, sizeof(buffer), encoded_length) ||
-		    encoded_length != 67) {
+		    encoded_length != 71) {
 			return false;
 		}
 
@@ -644,7 +644,7 @@ bool TargetFrameUdp::codec_self_test()
 	multi_input[1].latitude_e7 = 374219999;
 
 	if (!target_frame_udp::encode(multi_input, 2, 7, 42, CrcMode::Modbus, buffer, sizeof(buffer), encoded_length) ||
-	    encoded_length != 117) {
+	    encoded_length != 121) {
 		return false;
 	}
 

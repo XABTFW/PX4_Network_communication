@@ -10,7 +10,7 @@ static constexpr uint8_t FRAME_HEADER = 0xFD;
 static constexpr uint8_t PAYLOAD_LENGTH_FIELD = 0x10;
 static constexpr uint8_t MESSAGE_TYPE = 0x01;
 static constexpr uint8_t RESERVED = 0x01;
-static constexpr size_t HEADER_SIZE = 15;
+static constexpr size_t HEADER_SIZE = 19; // 8-byte (u64) time field
 static constexpr size_t TARGET_SIZE = 50;
 static constexpr size_t CRC_SIZE = 2;
 static constexpr size_t MAX_DATAGRAM_SIZE = 1472;
@@ -54,14 +54,14 @@ struct Target {
 
 struct FrameInfo {
 	uint8_t sequence{0};
-	uint32_t time_ms{0};
+	uint64_t time_ms{0};
 	uint8_t target_count{0};
 };
 
 size_t frame_size(size_t target_count);
 uint16_t crc16(CrcMode mode, const uint8_t *data, size_t length);
 
-bool encode(const Target *targets, size_t target_count, uint8_t sequence, uint32_t time_ms, CrcMode crc_mode,
+bool encode(const Target *targets, size_t target_count, uint8_t sequence, uint64_t time_ms, CrcMode crc_mode,
 	    uint8_t *buffer, size_t capacity, size_t &encoded_length);
 
 DecodeResult decode(const uint8_t *buffer, size_t length, CrcMode crc_mode, Target *targets, size_t target_capacity,

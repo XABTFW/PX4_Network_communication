@@ -8,12 +8,12 @@ existing `follower_info` uORB topic.
 ## Protocol assumptions
 
 - All multibyte fields are little-endian.
-- A one-target frame is 67 bytes: 15-byte header, 50-byte target, 2-byte CRC.
+- A one-target frame is 71 bytes: 19-byte header, 50-byte target, 2-byte CRC.
 - The documented payload-length byte remains the fixed value `0x10`.
 - Longitude/latitude retain the documented 32-bit wire layout but are treated as
   signed E7 values so western/southern coordinates work.
 - Integer altitude is millimetres; float altitude is metres AMSL.
-- The 32-bit millisecond time is PX4 time-since-boot and naturally wraps.
+- The 64-bit (8-byte) millisecond time is PX4 time-since-boot.
 - Vx/Vy/Vz use PX4 NED velocity, so positive Vz is down.
 - Distance, azimuth and elevation are zero because the sender does not know the
   receiver's position. Consumers use the global coordinates instead.

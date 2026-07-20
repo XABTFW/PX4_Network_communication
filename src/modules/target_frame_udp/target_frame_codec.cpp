@@ -21,6 +21,13 @@ void put_u32(uint8_t *buffer, size_t offset, uint32_t value)
 	buffer[offset + 3] = static_cast<uint8_t>(value >> 24);
 }
 
+void put_u64(uint8_t *buffer, size_t offset, uint64_t value)
+{
+	for (size_t i = 0; i < 8; ++i) {
+		buffer[offset + i] = static_cast<uint8_t>(value >> (8 * i));
+	}
+}
+
 void put_float(uint8_t *buffer, size_t offset, float value)
 {
 	uint32_t bits = 0;
@@ -41,6 +48,17 @@ uint32_t get_u32(const uint8_t *buffer, size_t offset)
 	       (static_cast<uint32_t>(buffer[offset + 1]) << 8) |
 	       (static_cast<uint32_t>(buffer[offset + 2]) << 16) |
 	       (static_cast<uint32_t>(buffer[offset + 3]) << 24);
+}
+
+uint64_t get_u64(const uint8_t *buffer, size_t offset)
+{
+	uint64_t value = 0;
+
+	for (size_t i = 0; i < 8; ++i) {
+		value |= static_cast<uint64_t>(buffer[offset + i]) << (8 * i);
+	}
+
+	return value;
 }
 
 float get_float(const uint8_t *buffer, size_t offset)
@@ -153,7 +171,7 @@ uint16_t crc16(CrcMode mode, const uint8_t *data, size_t length)
 	return 0;
 }
 
-bool encode(const Target *targets, size_t target_count, uint8_t sequence, uint32_t time_ms, CrcMode crc_mode,
+bool encode(const Target *targets, size_t target_count, uint8_t sequence, uint64_t time_ms, CrcMode crc_mode,
 	    uint8_t *buffer, size_t capacity, size_t &encoded_length)
 {
 	encoded_length = frame_size(target_count);
@@ -172,9 +190,9 @@ bool encode(const Target *targets, size_t target_count, uint8_t sequence, uint32
 	buffer[5] = 0xC5;
 	buffer[6] = 0xCE;
 	buffer[7] = 0xC2;
-	put_u32(buffer, 8, time_ms);
-	put_u16(buffer, 12, static_cast<uint16_t>(encoded_length));
-	buffer[14] = static_cast<uint8_t>(target_count);
+	put_u64(buffer, 8, time_ms);
+	put_u16(buffer, 16, static_cast<uint16_t>(encoded_length));
+	buffer[18] = static_cast<uint8_t>(target_count);
 
 	for (size_t i = 0; i < target_count; ++i) {
 		encode_target(targets[i], &buffer[HEADER_SIZE + i * TARGET_SIZE]);
@@ -192,7 +210,7 @@ DecodeResult decode(const uint8_t *buffer, size_t length, CrcMode crc_mode, Targ
 	if (buffer[5] != 0xC5 || buffer[6] != 0xCE || buffer[7] != 0xC2) { return DecodeResult::BadIdentifier; }
 	if (buffer[1] != PAYLOAD_LENGTH_FIELD) { return DecodeResult::BadPayloadLength; }
 
-	const size_t target_count = buffer[14];
+	const size_t target_count = buffer[18];
 
 	if (target_count == 0 || target_count > MAX_TARGETS || targets == nullptr || target_count > target_capacity) {
 		return DecodeResult::BadTargetCount;
@@ -200,7 +218,7 @@ DecodeResult decode(const uint8_t *buffer, size_t length, CrcMode crc_mode, Targ
 
 	const size_t expected_length = frame_size(target_count);
 
-	if (length != expected_length || get_u16(buffer, 12) != expected_length) { return DecodeResult::BadLength; }
+	if (length != expected_length || get_u16(buffer, 16) != expected_length) { return DecodeResult::BadLength; }
 
 	if (crc_mode != CrcMode::None &&
 	    get_u16(buffer, length - CRC_SIZE) != crc16(crc_mode, buffer, length - CRC_SIZE)) {
@@ -208,7 +226,7 @@ DecodeResult decode(const uint8_t *buffer, size_t length, CrcMode crc_mode, Targ
 	}
 
 	frame_info.sequence = buffer[2];
-	frame_info.time_ms = get_u32(buffer, 8);
+	frame_info.time_ms = get_u64(buffer, 8);
 	frame_info.target_count = static_cast<uint8_t>(target_count);
 
 	for (size_t i = 0; i < target_count; ++i) {

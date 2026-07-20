@@ -45,7 +45,7 @@ PAYLOAD_LENGTH_FIELD = 0x10
 MESSAGE_TYPE = 0x01
 RESERVED = 0x01
 IDENT = (0xC5, 0xCE, 0xC2)
-HEADER_SIZE = 15
+HEADER_SIZE = 19  # 8-byte (u64) time field
 TARGET_SIZE = 50
 CRC_SIZE = 2
 MAX_DATAGRAM_SIZE = 1472
@@ -101,11 +101,11 @@ def decode_radar_frame(buf, crc_mode):
         raise ValueError("标识符错误")
     if buf[1] != PAYLOAD_LENGTH_FIELD:
         raise ValueError("载荷长度字段错误")
-    count = buf[14]
+    count = buf[18]
     if count == 0 or count > MAX_TARGETS:
         raise ValueError("目标数量错误")
     expected = frame_size(count)
-    if length != expected or struct.unpack_from("<H", buf, 12)[0] != expected:
+    if length != expected or struct.unpack_from("<H", buf, 16)[0] != expected:
         raise ValueError("长度不匹配")
     if crc_mode != "none":
         got = struct.unpack_from("<H", buf, length - CRC_SIZE)[0]

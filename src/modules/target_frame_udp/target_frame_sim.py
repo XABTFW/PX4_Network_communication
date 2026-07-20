@@ -8,7 +8,7 @@ target_frame_sim.py
 功能:
   1. 手动输入十进制目标数据 (格式与模块的 senddec 完全一致):
          <id> <lon> <lat> <alt> <vx> <vy> <vz>
-  2. 按照 反无雷达 协议编码成 67 字节的目标帧 (与模块 target_frame_codec 完全一致),
+  2. 按照 反无雷达 协议编码成 71 字节的目标帧 (与模块 target_frame_codec 完全一致, 8字节时间),
      通过网线 (UDP) 发送给运行 PX4 的本机。
   3. 后台线程实时监听并解码收到的帧, 打印出与 PX4 `dump on` 一致的
      HEX + 十进制 内容, 方便对照校验。
@@ -42,7 +42,7 @@ PAYLOAD_LENGTH_FIELD = 0x10
 MESSAGE_TYPE = 0x01
 RESERVED = 0x01
 IDENT = (0xC5, 0xCE, 0xC2)
-HEADER_SIZE = 15
+HEADER_SIZE = 19  # 8-byte (u64) time field
 TARGET_SIZE = 50
 CRC_SIZE = 2
 MAX_DATAGRAM_SIZE = 1472
@@ -146,9 +146,9 @@ def encode(targets, sequence, time_ms, crc_mode):
     buf[3] = MESSAGE_TYPE
     buf[4] = RESERVED
     buf[5], buf[6], buf[7] = IDENT
-    struct.pack_into("<I", buf, 8, time_ms & 0xFFFFFFFF)
-    struct.pack_into("<H", buf, 12, total)
-    buf[14] = count
+    struct.pack_into("<Q", buf, 8, time_ms & 0xFFFFFFFFFFFFFFFF)
+    struct.pack_into("<H", buf, 16, total)
+    buf[18] = count
 
     off = HEADER_SIZE
     for t in targets:
@@ -178,12 +178,12 @@ def decode(buf, crc_mode):
     if buf[1] != PAYLOAD_LENGTH_FIELD:
         raise ValueError("载荷长度字段错误")
 
-    count = buf[14]
+    count = buf[18]
     if count == 0 or count > MAX_TARGETS:
         raise ValueError("目标数量错误")
 
     expected = frame_size(count)
-    if length != expected or struct.unpack_from("<H", buf, 12)[0] != expected:
+    if length != expected or struct.unpack_from("<H", buf, 16)[0] != expected:
         raise ValueError("长度不匹配")
 
     if crc_mode != "none":
@@ -194,7 +194,7 @@ def decode(buf, crc_mode):
 
     info = {
         "sequence": buf[2],
-        "time_ms": struct.unpack_from("<I", buf, 8)[0],
+        "time_ms": struct.unpack_from("<Q", buf, 8)[0],
         "target_count": count,
     }
 
